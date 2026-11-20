@@ -32,10 +32,11 @@ _state = {
 }
 _lock = threading.Lock()
 
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "http://127.0.0.1:8000").rstrip("/")
 REDIRECT_URL = PUBLIC_BASE_URL + "/api/zerodha/callback"
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 NIFTY500_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv"
+NIFTY50_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv"
 
 
 class Credentials(BaseModel):
@@ -261,6 +262,21 @@ def _nifty500_symbols():
     return set(df[col].astype(str).str.strip().str.upper())
 
 
+def _nifty50_symbols():
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/csv,*/*",
+        "Referer": "https://www.niftyindices.com/",
+    }
+    resp = requests.get(NIFTY50_URL, headers=headers, timeout=25)
+    resp.raise_for_status()
+    df = pd.read_csv(pd.io.common.BytesIO(resp.content))
+    col = next((c for c in df.columns if c.strip().lower() == "symbol"), None)
+    if not col:
+        raise RuntimeError("Nifty 50 constituent file did not contain a Symbol column.")
+    return set(df[col].astype(str).str.strip().str.upper())
+
+
 def _fetch_universe(kite, choice):
     nse = pd.DataFrame(kite.instruments("NSE"))
     if nse.empty:
@@ -270,17 +286,22 @@ def _fetch_universe(kite, choice):
     token_map = dict(zip(eq["symbol"], eq["instrument_token"]))
 
     n500 = _nifty500_symbols()
+    n50 = _nifty50_symbols()
     nfo = pd.DataFrame(kite.instruments("NFO"))
     fo = set()
     if not nfo.empty and {"instrument_type", "name"}.issubset(nfo.columns):
         fo = set(nfo.loc[nfo["instrument_type"] == "FUT", "name"].dropna().astype(str).str.upper())
 
-    if choice == "NSE 500 Only":
-        selected = n500
-    elif choice == "F&O Only":
-        selected = fo
-    else:
-        selected = n500 | fo
+    groups = {
+        "NSE 50 Only": n50,
+        "NSE 500 Only": n500,
+        "F&O Only": fo,
+        "NSE 50 + NSE 500": n50 | n500,
+        "NSE 50 + F&O": n50 | fo,
+        "NSE 500 + F&O": n500 | fo,
+        "NSE 50 + NSE 500 + F&O": n50 | n500 | fo,
+    }
+    selected = groups.get(choice, n500 | fo)
 
     return [{"symbol": sym, "instrument_token": int(token_map[sym])}
             for sym in sorted(selected) if sym in token_map]
