@@ -33,7 +33,8 @@ footer{text-align:center;color:#708e79;padding:28px;font-size:12px}
 @media(max-width:800px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.statgrid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:560px){header{height:58px;padding:0 14px}.wrap{padding:0 12px;margin:18px auto}.grid,.cards{grid-template-columns:1fr}.panel{padding:16px}.nav{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}.nav button{padding:9px 4px;font-size:12px}.hero{padding:20px}.header-right{font-size:11px}}
 </style>
-<link rel="manifest" href="/assets/manifest.webmanifest">\n</head>
+<link rel="manifest" href="/assets/manifest.webmanifest">
+</head>
 <body>
 <div id="loginView" class="login">
   <div class="panel">
@@ -71,7 +72,15 @@ footer{text-align:center;color:#708e79;padding:28px;font-size:12px}
 <div class="field"><label>Timeframe</label><select id="timeframe"><option value="5minute">5 Minute</option><option value="15minute">15 Minute</option><option value="60minute">60 Minute</option><option value="day" selected>Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select></div>
 <div class="field"><label>Minimum consolidation candles</label><input id="cmin" type="number" min="1" max="500" value="10"></div>
 <div class="field"><label>Maximum consolidation candles</label><input id="cmax" type="number" min="1" max="500" value="15"></div>
-<div class="field"><label>Stock Group</label><select id="universe"><option value="NSE 500 Only">NIFTY 500 Stocks</option><option value="F&O Only">F&O Stocks</option><option value="NSE 500 + F&O" selected>NIFTY 500 + F&O Stocks</option></select></div>
+<div class="field"><label>Stock Group</label><select id="universe">
+<option value="NSE 50 Only">NIFTY 50 Stocks</option>
+<option value="NSE 500 Only">NIFTY 500 Stocks</option>
+<option value="F&O Only">F&amp;O Stocks</option>
+<option value="NSE 50 + NSE 500">NIFTY 50 + NIFTY 500</option>
+<option value="NSE 50 + F&amp;O">NIFTY 50 + F&amp;O</option>
+<option value="NSE 500 + F&amp;O">NIFTY 500 + F&amp;O</option>
+<option value="NSE 50 + NSE 500 + F&amp;O" selected>All: NIFTY 50 + NIFTY 500 + F&amp;O</option>
+</select></div>
 <div class="field"><label>Maximum consolidation range (%)</label><input id="maxRange" type="number" min=".1" max="20" step=".1" value="3.5"></div>
 <div class="field"><label>Near breakout distance (%)</label><input id="nearPct" type="number" min=".1" max="10" step=".1" value="1"></div>
 <div class="field"><label>Volume multiple</label><input id="volumeMultiple" type="number" min="1" max="10" step=".1" value="1.5"></div>
@@ -81,7 +90,7 @@ footer{text-align:center;color:#708e79;padding:28px;font-size:12px}
 </div>
 <div class="form-actions"><button class="btn full" id="runBtn">RUN SCANNER</button></div>
 <div id="scanStatus" class="status hidden"></div><div class="progress hidden" id="progressWrap"><div id="progressBar"></div></div>
-<div id="scanStats" class="statgrid hidden"></div><div id="scanResults"></div>
+<div id="scanStats" class="statgrid hidden"></div><div id="scanResults"></div><button class="btn secondary hidden" id="downloadCsvBtn" type="button">DOWNLOAD CSV</button>
 </div>
 </section>
 <section id="tab-reports" class="hidden"><div class="panel"><h1>Reports</h1><p class="muted">The latest completed scan results appear here during this session.</p><div id="reportContent" class="muted">No scan report yet.</div></div></section>
@@ -103,19 +112,25 @@ $('logoutBtn').addEventListener('click',async()=>{await api('/api/logout',{metho
 $('connectBtn').addEventListener('click',async()=>{try{const x=await api('/api/zerodha/login-url');location.href=x.login_url;}catch(e){alert(e.message);}});
 let pollTimer=null;
 function renderSignals(signals){if(!signals||!signals.length){$('scanResults').innerHTML='';return;}const keys=['symbol','signal','close','resistance','support','buy_trigger','distance_to_resistance_pct'];const labels={symbol:'Symbol',signal:'Signal',close:'Close',resistance:'Resistance',support:'Support',buy_trigger:'Buy Trigger',distance_to_resistance_pct:'Distance %'};let rows=signals.map(x=>'<tr>'+keys.map(k=>`<td>${x[k]??'—'}</td>`).join('')+'</tr>').join('');$('scanResults').innerHTML='<div class="tablewrap"><table><thead><tr>'+keys.map(k=>`<th>${labels[k]}</th>`).join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';}
+function downloadSignalsCsv(signals){
+ const cols=['symbol','signal','date','close','resistance','support','range_pct','distance_to_resistance_pct','consolidation_candles','volume','average_volume','volume_ratio','breakout_candle_high','buy_trigger','note'];
+ const esc=v=>'"'+String(v??'').replaceAll('"','""')+'"';
+ const csv=[cols.join(','),...(signals||[]).map(row=>cols.map(k=>esc(row[k])).join(','))].join('\r\n');
+ const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='kartik_breakout_signals.csv';a.click();URL.revokeObjectURL(url);
+}
 function stats(signals){let c={'Consolidation Forming':0,'Near Breakout':0,'Breakout Confirmed':0};(signals||[]).forEach(x=>{if(c[x.signal]!==undefined)c[x.signal]++});$('scanStats').classList.remove('hidden');$('scanStats').innerHTML=`<div class="stat"><span>Total Setups</span><strong>${signals.length}</strong></div><div class="stat"><span>Consolidation Forming</span><strong>${c['Consolidation Forming']}</strong></div><div class="stat"><span>Near Breakout</span><strong>${c['Near Breakout']}</strong></div><div class="stat"><span>Breakout Confirmed</span><strong>${c['Breakout Confirmed']}</strong></div>`;}
 $('runBtn').addEventListener('click',async()=>{
  if(pollTimer)clearInterval(pollTimer);
  const min=+$('cmin').value,max=+$('cmax').value;
  if(min<1||max<1||min>max){alert('Please check minimum and maximum consolidation candles.');return;}
  const payload={timeframe:$('timeframe').value,universe:$('universe').value,consolidation_min:min,consolidation_max:max,max_range_pct:+$('maxRange').value,near_pct:+$('nearPct').value,volume_multiple:+$('volumeMultiple').value,volume_period:+$('volumePeriod').value,max_symbols:+$('maxSymbols').value,request_delay:+$('requestDelay').value};
- $('runBtn').disabled=true;$('scanResults').innerHTML='';$('scanStats').classList.add('hidden');$('progressWrap').classList.remove('hidden');$('progressBar').style.width='0%';$('scanStatus').className='status';$('scanStatus').textContent='Starting a new scan…';
+ $('runBtn').disabled=true;$('scanResults').innerHTML='';$('scanStats').classList.add('hidden');$('downloadCsvBtn').classList.add('hidden');$('progressWrap').classList.remove('hidden');$('progressBar').style.width='0%';$('scanStatus').className='status';$('scanStatus').textContent='Starting a new scan…';
  try{await api('/api/scanner/start',{method:'POST',body:JSON.stringify(payload)});pollTimer=setInterval(pollScan,1800);await pollScan();}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;$('runBtn').disabled=false;}
 });
-async function pollScan(){try{const s=await api('/api/scanner/status');const n=s.total||0,p=s.progress||0;$('progressBar').style.width=(n?Math.min(100,p*100/n):0)+'%';$('scanStatus').className='status';$('scanStatus').textContent=`${s.timeframe} · ${p}/${n} stocks · Current: ${s.current_symbol||'Finishing'} · Signals: ${s.signals_count} · Errors: ${s.errors_count}`;renderSignals(s.signals);stats(s.signals);$('reportContent').innerHTML=`<p>Latest scan: ${s.scan_date||'—'} · ${s.timeframe} · ${s.signals_count} signals</p>`;if(s.error){$('scanStatus').className='status error';$('scanStatus').textContent='Scan stopped: '+s.error;finish();}else if(s.done){$('progressBar').style.width='100%';$('scanStatus').className='status success';$('scanStatus').textContent=`Scan complete · ${s.signals_count} setups found from ${s.total} symbols.`;if(s.errors&&s.errors.length){$('scanStatus').textContent+=` · ${s.errors_count} API errors`;}finish();}}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;finish();}}
+async function pollScan(){try{const s=await api('/api/scanner/status');const n=s.total||0,p=s.progress||0;$('progressBar').style.width=(n?Math.min(100,p*100/n):0)+'%';$('scanStatus').className='status';$('scanStatus').textContent=`${s.timeframe} · ${p}/${n} stocks · Current: ${s.current_symbol||'Finishing'} · Signals: ${s.signals_count} · Errors: ${s.errors_count}`;renderSignals(s.signals);stats(s.signals);$('reportContent').innerHTML=`<p>Latest scan: ${s.scan_date||'—'} · ${s.timeframe} · ${s.signals_count} signals</p>`;if(s.error){$('scanStatus').className='status error';$('scanStatus').textContent='Scan stopped: '+s.error;finish();}else if(s.done){$('progressBar').style.width='100%';$('scanStatus').className='status success';$('scanStatus').textContent=`Scan complete · ${s.signals_count} setups found from ${s.total} symbols.`;if(s.signals_count>0){$('downloadCsvBtn').classList.remove('hidden');$('downloadCsvBtn').onclick=()=>downloadSignalsCsv(s.signals); }if(s.errors&&s.errors.length){$('scanStatus').textContent+=` · ${s.errors_count} API errors`;}finish();}}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;finish();}}
 function finish(){if(pollTimer)clearInterval(pollTimer);pollTimer=null;$('runBtn').disabled=false;}
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/assets/sw.js').catch(()=>{});}
-  async function boot(){try{await api('/api/app/status');enterApp();}catch(e){if(e.message==='Please login to Kartik Algo.'){$('loginView').classList.remove('hidden');}else{$('loginView').classList.remove('hidden');$('loginError').textContent=e.message;}}}
+async function boot(){try{await api('/api/app/status');enterApp();}catch(e){if(e.message==='Please login to Kartik Algo.'){$('loginView').classList.remove('hidden');}else{$('loginView').classList.remove('hidden');$('loginError').textContent=e.message;}}}
 boot();
 </script>
 </body></html>
