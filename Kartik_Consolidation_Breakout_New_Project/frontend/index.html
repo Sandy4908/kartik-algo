@@ -114,7 +114,8 @@ $('runBtn').addEventListener('click',async()=>{
 });
 async function pollScan(){try{const s=await api('/api/scanner/status');const n=s.total||0,p=s.progress||0;$('progressBar').style.width=(n?Math.min(100,p*100/n):0)+'%';$('scanStatus').className='status';$('scanStatus').textContent=`${s.timeframe} · ${p}/${n} stocks · Current: ${s.current_symbol||'Finishing'} · Signals: ${s.signals_count} · Errors: ${s.errors_count}`;renderSignals(s.signals);stats(s.signals);$('reportContent').innerHTML=`<p>Latest scan: ${s.scan_date||'—'} · ${s.timeframe} · ${s.signals_count} signals</p>`;if(s.error){$('scanStatus').className='status error';$('scanStatus').textContent='Scan stopped: '+s.error;finish();}else if(s.done){$('progressBar').style.width='100%';$('scanStatus').className='status success';$('scanStatus').textContent=`Scan complete · ${s.signals_count} setups found from ${s.total} symbols.`;if(s.errors&&s.errors.length){$('scanStatus').textContent+=` · ${s.errors_count} API errors`;}finish();}}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;finish();}}
 function finish(){if(pollTimer)clearInterval(pollTimer);pollTimer=null;$('runBtn').disabled=false;}
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/assets/sw.js').catch(()=>{});}\nasync function boot(){try{await api('/api/app/status');enterApp();}catch(e){if(e.message==='Please login to Kartik Algo.'){$('loginView').classList.remove('hidden');}else{$('loginView').classList.remove('hidden');$('loginError').textContent=e.message;}}}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/assets/sw.js').catch(()=>{});}
+  async function boot(){try{await api('/api/app/status');enterApp();}catch(e){if(e.message==='Please login to Kartik Algo.'){$('loginView').classList.remove('hidden');}else{$('loginView').classList.remove('hidden');$('loginError').textContent=e.message;}}}
 boot();
 </script>
 </body></html>
