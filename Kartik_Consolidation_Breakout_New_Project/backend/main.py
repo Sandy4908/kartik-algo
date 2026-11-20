@@ -19,6 +19,14 @@ from backend.strategy import scan_symbol, normalize_ohlcv
 IST = ZoneInfo("Asia/Kolkata")
 app = FastAPI(title="Kartik Algo", version="2.0.0")
 
+# SessionMiddleware must be registered before the authentication middleware.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("SESSION_SECRET", "CHANGE-ME-" + os.urandom(24).hex()),
+    https_only=os.environ.get("COOKIE_SECURE", "false").lower() == "true",
+    same_site="lax",
+)
+
 
 # In-memory session state: tokens are not written to disk.
 _state = {
@@ -104,10 +112,6 @@ async def app_auth_guard(request: Request, call_next):
             return JSONResponse({"detail": "Please login to Kartik Algo."}, status_code=401)
         return RedirectResponse("/", status_code=303)
     return await call_next(request)
-    app.add_middleware(SessionMiddleware,
-    secret_key=os.environ.get("SESSION_SECRET", "CHANGE-ME-" + os.urandom(24).hex()),
-    https_only=os.environ.get("COOKIE_SECURE", "false").lower() == "true",
-    same_site="lax")
 
 
 @app.get("/", response_class=HTMLResponse)
