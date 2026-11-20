@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#07150e"><title>Kartik Algo</title>
+<style>
+:root{--bg:#07150e;--panel:#10251a;--panel2:#132d20;--line:#28543a;--green:#2c8b55;--text:#eaf5ed;--muted:#9bb7a3;--red:#cf4052;--gold:#d9b65b}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -10%,#173d28 0%,var(--bg) 55%);color:var(--text);font:15px/1.5 Inter,Segoe UI,Arial,sans-serif;min-height:100vh}
+button,input,select{font:inherit}button{cursor:pointer}.hidden{display:none!important}
+header{height:68px;border-bottom:1px solid #244a34;background:#0b1d13ed;display:flex;align-items:center;justify-content:space-between;padding:0 max(20px,calc((100% - 1200px)/2));position:sticky;top:0;z-index:5;backdrop-filter:blur(14px)}
+.brand{display:flex;gap:11px;align-items:center;font-weight:800;letter-spacing:1.5px}.logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(145deg,#39a66b,#14512f);display:grid;place-items:center;font-size:20px}
+.header-right{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:13px}
+.wrap{max-width:1200px;margin:28px auto;padding:0 20px}
+.nav{display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:24px}
+.nav button{border:1px solid transparent;background:transparent;color:var(--muted);padding:10px 17px;border-radius:10px}
+.nav button.active{background:#1a422b;border-color:#326a46;color:#f1fff4}
+.panel{background:linear-gradient(145deg,#10271a,#0b1c12);border:1px solid var(--line);border-radius:16px;padding:22px;margin-bottom:18px;box-shadow:0 12px 35px #0002}
+h1{font-size:clamp(25px,4vw,34px);margin:0 0 8px}h2{font-size:20px;margin:0 0 14px}h3{font-size:16px;margin:0 0 8px}.muted{color:var(--muted)}.small{font-size:12px;color:var(--muted)}
+.hero{padding:30px;background:linear-gradient(120deg,#153c27,#0d2116);border:1px solid #326a46;border-radius:18px;margin-bottom:18px}
+.btn{border:1px solid #459566;background:linear-gradient(180deg,#2b8a54,#1d6a3e);color:#fff;padding:12px 18px;border-radius:10px;font-weight:700}
+.btn.secondary{background:#142a1d;border-color:#355c42;color:#d9e9de}.btn.danger{background:#6f2530;border-color:#9c3b49}.btn:disabled{opacity:.5;cursor:not-allowed}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:13px;color:#c4d9ca}.field input,.field select{width:100%;background:#202c25;color:#f4fff6;border:1px solid #3b5143;border-radius:9px;padding:11px 12px;min-height:43px}
+.field input:focus,.field select:focus{outline:2px solid #398b59;border-color:#398b59}
+.form-actions{margin-top:18px}.full{width:100%}
+.statgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:16px 0}.stat{background:#102a1c;border:1px solid #28583b;border-radius:13px;padding:16px}.stat span{display:block;color:#a9cdb5;font-size:13px}.stat strong{font-size:28px}
+.status{padding:13px 15px;border-radius:10px;background:#1b2b3e;border:1px solid #304b67;margin:12px 0}.success{background:#123b25;border-color:#2a7145}.error{background:#421e24;border-color:#883846}
+.progress{height:9px;background:#29372f;border-radius:20px;overflow:hidden;margin:12px 0}.progress>div{height:100%;width:0;background:#278bdf;transition:width .2s}
+.tablewrap{overflow:auto;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;min-width:700px}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #284533;font-size:13px}th{color:#a8cdb4;background:#12291b;position:sticky;top:0}td{color:#e2efe6}
+.pill{display:inline-block;padding:4px 9px;border-radius:20px;background:#193e29;color:#a9e2bb;font-size:12px}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.card{background:#10271a;border:1px solid var(--line);border-radius:13px;padding:18px}
+.login{max-width:440px;margin:12vh auto;padding:28px}.login .panel{text-align:center;padding:32px}.login input{margin:15px 0}
+footer{text-align:center;color:#708e79;padding:28px;font-size:12px}
+@media(max-width:800px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.statgrid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){header{height:58px;padding:0 14px}.wrap{padding:0 12px;margin:18px auto}.grid,.cards{grid-template-columns:1fr}.panel{padding:16px}.nav{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}.nav button{padding:9px 4px;font-size:12px}.hero{padding:20px}.header-right{font-size:11px}}
+</style>
+<link rel="manifest" href="/assets/manifest.webmanifest">\n</head>
+<body>
+<div id="loginView" class="login">
+  <div class="panel">
+    <div class="logo" style="margin:auto">↗</div>
+    <h1 style="margin-top:14px">KARTIK ALGO</h1>
+    <p class="muted">Your trading research workspace</p>
+    <form id="loginForm">
+      <div class="field" style="text-align:left"><label>Website Password</label><input id="appPassword" type="password" placeholder="Enter your password" required autocomplete="current-password"></div>
+      <button class="btn full" style="margin-top:14px">LOGIN</button>
+      <p id="loginError" class="small"></p>
+    </form>
+  </div>
+</div>
+<div id="appView" class="hidden">
+<header><div class="brand"><div class="logo">↗</div><span>KARTIK ALGO</span></div><div class="header-right"><span id="topStatus">Secure workspace</span><button class="btn secondary" id="logoutBtn" style="padding:7px 12px">Logout</button></div></header>
+<main class="wrap">
+<nav class="nav" id="tabs">
+<button class="active" data-tab="home">⌂ Home</button>
+<button data-tab="scanner">⌕ Scanner</button>
+<button data-tab="reports">▤ Reports</button>
+<button data-tab="settings">⚙ Settings</button>
+</nav>
+<section id="tab-home">
+<div class="hero"><span class="pill">TRADING WORKSPACE</span><h1 style="margin-top:14px">Welcome to Kartik Algo</h1><p class="muted">Market scanning tools in one place. Start with the Consolidation Breakout Scanner.</p><button class="btn" onclick="showTab('scanner')">Open Scanner →</button></div>
+<div class="cards">
+<div class="card"><h3>Consolidation Breakout</h3><p class="muted">Find consolidation, near-breakout and confirmed-breakout setups across selected NSE stock groups.</p><span class="pill">Available in Scanner</span></div>
+<div class="card"><h3>Zerodha Connection</h3><p class="muted" id="homeZerodha">Checking connection…</p><button class="btn secondary" onclick="showTab('settings')">Connection Settings</button></div>
+</div>
+</section>
+<section id="tab-scanner" class="hidden">
+<div style="margin-bottom:18px"><h1>Scanner</h1><p class="muted">Consolidation Breakout Scanner</p></div>
+<div class="panel">
+<h2>Scanner Configuration</h2>
+<div class="grid">
+<div class="field"><label>Timeframe</label><select id="timeframe"><option value="5minute">5 Minute</option><option value="15minute">15 Minute</option><option value="60minute">60 Minute</option><option value="day" selected>Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select></div>
+<div class="field"><label>Minimum consolidation candles</label><input id="cmin" type="number" min="1" max="500" value="10"></div>
+<div class="field"><label>Maximum consolidation candles</label><input id="cmax" type="number" min="1" max="500" value="15"></div>
+<div class="field"><label>Stock Group</label><select id="universe"><option value="NSE 500 Only">NIFTY 500 Stocks</option><option value="F&O Only">F&O Stocks</option><option value="NSE 500 + F&O" selected>NIFTY 500 + F&O Stocks</option></select></div>
+<div class="field"><label>Maximum consolidation range (%)</label><input id="maxRange" type="number" min=".1" max="20" step=".1" value="3.5"></div>
+<div class="field"><label>Near breakout distance (%)</label><input id="nearPct" type="number" min=".1" max="10" step=".1" value="1"></div>
+<div class="field"><label>Volume multiple</label><input id="volumeMultiple" type="number" min="1" max="10" step=".1" value="1.5"></div>
+<div class="field"><label>Average volume lookback</label><input id="volumePeriod" type="number" min="5" max="60" value="20"></div>
+<div class="field"><label>Maximum symbols (0 = all)</label><input id="maxSymbols" type="number" min="0" max="2000" value="0"></div>
+<div class="field"><label>Request delay (seconds)</label><input id="requestDelay" type="number" min=".1" max="3" step=".05" value=".2"></div>
+</div>
+<div class="form-actions"><button class="btn full" id="runBtn">RUN SCANNER</button></div>
+<div id="scanStatus" class="status hidden"></div><div class="progress hidden" id="progressWrap"><div id="progressBar"></div></div>
+<div id="scanStats" class="statgrid hidden"></div><div id="scanResults"></div>
+</div>
+</section>
+<section id="tab-reports" class="hidden"><div class="panel"><h1>Reports</h1><p class="muted">The latest completed scan results appear here during this session.</p><div id="reportContent" class="muted">No scan report yet.</div></div></section>
+<section id="tab-settings" class="hidden">
+<div class="panel"><h1>Settings</h1><h2 style="margin-top:20px">Zerodha Connection</h2><p id="zerodhaState" class="muted">Checking status…</p><div class="field"><label>Registered Redirect URL</label><input id="redirectUrl" readonly></div><p class="small">Set the same HTTPS URL in your Kite Connect app settings. API Key and Secret are stored as private hosting environment variables, not in this website.</p><button class="btn" id="connectBtn">CONNECT ZERODHA</button></div>
+</section>
+</main><footer>Kartik Algo · Scanner signals are research information, not orders.</footer>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+function showTab(name){document.querySelectorAll('main section').forEach(s=>s.classList.add('hidden'));$('tab-'+name).classList.remove('hidden');document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));}
+window.showTab=showTab;
+document.querySelectorAll('#tabs button').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
+async function api(path,opts={}){const r=await fetch(path,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(opts.headers||{})},...opts});let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.detail||`Request failed (${r.status})`);return d;}
+async function loadStatus(){try{const s=await api('/api/app/status');$('topStatus').textContent=s.zerodha_connected?'Zerodha Connected':'Workspace Active';$('homeZerodha').textContent=s.zerodha_connected?'Connected to Zerodha':(s.zerodha_credentials_loaded?'Credentials ready · Login required':'Zerodha API credentials not configured');$('zerodhaState').textContent=s.zerodha_connected?'Connected':'Not connected';$('redirectUrl').value=s.redirect_url;$('connectBtn').disabled=!s.zerodha_credentials_loaded;$('connectBtn').textContent=s.zerodha_connected?'ZERODHA CONNECTED':'CONNECT ZERODHA';}catch(e){$('zerodhaState').textContent=e.message;}}
+async function enterApp(){ $('loginView').classList.add('hidden');$('appView').classList.remove('hidden');await loadStatus();if(location.search.includes('zerodha=connected')){showTab('scanner');history.replaceState({},'', '/');}}
+$('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginError').textContent='';try{await api('/api/login',{method:'POST',body:JSON.stringify({password:$('appPassword').value})});enterApp();}catch(err){$('loginError').textContent=err.message;}});
+$('logoutBtn').addEventListener('click',async()=>{await api('/api/logout',{method:'POST'});location.reload();});
+$('connectBtn').addEventListener('click',async()=>{try{const x=await api('/api/zerodha/login-url');location.href=x.login_url;}catch(e){alert(e.message);}});
+let pollTimer=null;
+function renderSignals(signals){if(!signals||!signals.length){$('scanResults').innerHTML='';return;}const keys=['symbol','signal','close','resistance','support','buy_trigger','distance_to_resistance_pct'];const labels={symbol:'Symbol',signal:'Signal',close:'Close',resistance:'Resistance',support:'Support',buy_trigger:'Buy Trigger',distance_to_resistance_pct:'Distance %'};let rows=signals.map(x=>'<tr>'+keys.map(k=>`<td>${x[k]??'—'}</td>`).join('')+'</tr>').join('');$('scanResults').innerHTML='<div class="tablewrap"><table><thead><tr>'+keys.map(k=>`<th>${labels[k]}</th>`).join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';}
+function stats(signals){let c={'Consolidation Forming':0,'Near Breakout':0,'Breakout Confirmed':0};(signals||[]).forEach(x=>{if(c[x.signal]!==undefined)c[x.signal]++});$('scanStats').classList.remove('hidden');$('scanStats').innerHTML=`<div class="stat"><span>Total Setups</span><strong>${signals.length}</strong></div><div class="stat"><span>Consolidation Forming</span><strong>${c['Consolidation Forming']}</strong></div><div class="stat"><span>Near Breakout</span><strong>${c['Near Breakout']}</strong></div><div class="stat"><span>Breakout Confirmed</span><strong>${c['Breakout Confirmed']}</strong></div>`;}
+$('runBtn').addEventListener('click',async()=>{
+ if(pollTimer)clearInterval(pollTimer);
+ const min=+$('cmin').value,max=+$('cmax').value;
+ if(min<1||max<1||min>max){alert('Please check minimum and maximum consolidation candles.');return;}
+ const payload={timeframe:$('timeframe').value,universe:$('universe').value,consolidation_min:min,consolidation_max:max,max_range_pct:+$('maxRange').value,near_pct:+$('nearPct').value,volume_multiple:+$('volumeMultiple').value,volume_period:+$('volumePeriod').value,max_symbols:+$('maxSymbols').value,request_delay:+$('requestDelay').value};
+ $('runBtn').disabled=true;$('scanResults').innerHTML='';$('scanStats').classList.add('hidden');$('progressWrap').classList.remove('hidden');$('progressBar').style.width='0%';$('scanStatus').className='status';$('scanStatus').textContent='Starting a new scan…';
+ try{await api('/api/scanner/start',{method:'POST',body:JSON.stringify(payload)});pollTimer=setInterval(pollScan,1800);await pollScan();}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;$('runBtn').disabled=false;}
+});
+async function pollScan(){try{const s=await api('/api/scanner/status');const n=s.total||0,p=s.progress||0;$('progressBar').style.width=(n?Math.min(100,p*100/n):0)+'%';$('scanStatus').className='status';$('scanStatus').textContent=`${s.timeframe} · ${p}/${n} stocks · Current: ${s.current_symbol||'Finishing'} · Signals: ${s.signals_count} · Errors: ${s.errors_count}`;renderSignals(s.signals);stats(s.signals);$('reportContent').innerHTML=`<p>Latest scan: ${s.scan_date||'—'} · ${s.timeframe} · ${s.signals_count} signals</p>`;if(s.error){$('scanStatus').className='status error';$('scanStatus').textContent='Scan stopped: '+s.error;finish();}else if(s.done){$('progressBar').style.width='100%';$('scanStatus').className='status success';$('scanStatus').textContent=`Scan complete · ${s.signals_count} setups found from ${s.total} symbols.`;if(s.errors&&s.errors.length){$('scanStatus').textContent+=` · ${s.errors_count} API errors`;}finish();}}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;finish();}}
+function finish(){if(pollTimer)clearInterval(pollTimer);pollTimer=null;$('runBtn').disabled=false;}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/assets/sw.js').catch(()=>{});}\nasync function boot(){try{await api('/api/app/status');enterApp();}catch(e){if(e.message==='Please login to Kartik Algo.'){$('loginView').classList.remove('hidden');}else{$('loginView').classList.remove('hidden');$('loginError').textContent=e.message;}}}
+boot();
+</script>
+</body></html>
