@@ -120,20 +120,22 @@ function stats(signals){let c={'Consolidation Forming':0,'Near Breakout':0,'Brea
 let pollTimer=null,autoTimer=null,autoActive=false,currentPayload=null,lastStatus=null;
 function sortedSignals(signals){const field=$('sortField').value,asc=$('sortDirection').value==='asc',rank={'Breakout Confirmed':3,'Near Breakout':2,'Consolidation Forming':1};return [...(signals||[])].sort((a,b)=>{let x=a[field],y=b[field];if(field==='signal'){x=rank[x]??9;y=rank[y]??9;}else if(field==='symbol'){x=String(x||'').toUpperCase();y=String(y||'').toUpperCase();}else{x=Number(x??-Infinity);y=Number(y??-Infinity);}return x<y?(asc?-1:1):x>y?(asc?1:-1):0;});}
 function applyCurrentResultFilters(signals){
-  const min=Number($('cmin').value||1),max=Number($('cmax').value||500);
-  const maxRange=Number($('maxRange').value||20),near=Number($('nearPct').value||10);
+  const min=Math.max(1,Number($('cmin').value||1)),max=Math.max(min,Number($('cmax').value||500));
+  const maxRange=Math.max(0,Number($('maxRange').value||20));
+  const near=Math.max(0,Number($('nearPct').value||10));
+  const volMin=Math.max(0,Number($('volumeMultiple').value||1));
   return (signals||[]).filter(x=>{
     const candles=Number(x.consolidation_candles),range=Number(x.range_pct);
-    const distance=Number(x.distance_to_resistance_pct);
-    const broke=x.signal==='Breakout Confirmed'||(Number.isFinite(distance)&&distance<0);
+    const distance=Number(x.distance_to_resistance_pct),vol=Number(x.volume_ratio);
+    const breakout=x.signal==='Breakout Confirmed'||(Number.isFinite(distance)&&distance<0);
     if(!Number.isFinite(candles)||candles<min||candles>max)return false;
     if(!Number.isFinite(range)||range>maxRange)return false;
-    // Apply near-distance to current rows: retain confirmed breakouts or setups
-    // that are actually within the user's current near-breakout threshold.
-    if(!broke&&(!Number.isFinite(distance)||distance<0||distance>near))return false;
+    if(!breakout&&(!Number.isFinite(distance)||distance<0||distance>near))return false;
+    if(!breakout&&Number.isFinite(vol)&&vol<volMin)return false;
     return true;
   });
 }
+
 function renderSignals(signals){if(!signals||!signals.length){stats([]);$('scanResults').innerHTML='<p class="muted">No breakout signal yet. Scanned stocks are available in CSV.</p>';return;}const keys=['symbol','signal','consolidation_candles','range_pct','close','resistance','support','buy_trigger','distance_to_resistance_pct'];const labels={symbol:'Symbol',signal:'Signal',consolidation_candles:'Range Candles',range_pct:'Range %',close:'Close',resistance:'Resistance',support:'Support',buy_trigger:'Buy Trigger',distance_to_resistance_pct:'Distance %'};const esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const filtered=applyCurrentResultFilters(signals);stats(filtered);const rows=sortedSignals(filtered).map(x=>'<tr>'+keys.map(k=>k==='symbol'?`<td><button class="chart-open" data-symbol="${esc(x.symbol)}" title="Open ${esc(x.symbol)} chart and scan conditions">${esc(x.symbol)} ↗</button></td>`:k==='signal'?`<td><span class="signal-tag ${x[k]==='Breakout Confirmed'?'signal-confirmed':x[k]==='Near Breakout'?'signal-near':'signal-forming'}">${esc(x[k])}</span></td>`:k==='consolidation_candles'?`<td><strong title="Number of candles inside the narrow consolidation range; current breakout candle is excluded">${esc(x[k])} candles</strong></td>`:`<td>${esc(x[k])}</td>`).join('')+'</tr>').join('');$('scanResults').innerHTML='<p class="small muted">Showing '+filtered.length+' of '+signals.length+' loaded results after current filters. Range Candles shows how many completed candles formed the narrow consolidation (signal/current candle excluded). Sort by Range Candle Count to find stocks with the most candles in a tight range. Click a symbol for its same-timeframe chart.</p><div class="tablewrap"><table><thead><tr>'+keys.map(k=>`<th>${labels[k]}</th>`).join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';document.querySelectorAll('.chart-open').forEach(b=>b.addEventListener('click',()=>openStockChart(b.dataset.symbol))); }
 
 function closeStockChart(){ $('chartModal').classList.add('hidden');document.body.style.overflow=''; }
@@ -147,8 +149,22 @@ function nextSlotDelay(tf){const now=new Date(),parts=new Intl.DateTimeFormat('e
 async function startOneCycle(payload){$('runBtn').disabled=true;$('stopBtn').classList.remove('hidden');$('scanResults').innerHTML='';$('scanStats').classList.add('hidden');$('downloadCsvBtn').classList.remove('hidden');$('progressWrap').classList.remove('hidden');$('progressBar').style.width='0%';$('scanStatus').className='status';$('scanStatus').textContent='Starting scan cycle…';try{await api('/api/scanner/start',{method:'POST',body:JSON.stringify(payload)});if(pollTimer)clearInterval(pollTimer);pollTimer=setInterval(pollScan,1800);await pollScan();}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;finish(false);}}
 $('runBtn').addEventListener('click',()=>{try{if(autoTimer)clearTimeout(autoTimer);currentPayload=makePayload();saveLastSettings();autoActive=$('autoRun').checked;startOneCycle(currentPayload);}catch(e){alert(e.message);}});
 $('stopBtn').addEventListener('click',async()=>{autoActive=false;if(autoTimer)clearTimeout(autoTimer);const scanInProgress=!!pollTimer;try{const r=await api('/api/scanner/stop',{method:'POST'});$('scanStatus').textContent=r.message+' Waiting for current symbol to finish; CSV will remain available.';}catch(e){$('scanStatus').textContent=e.message;}if(!scanInProgress)finish(false);});
-$('downloadCsvBtn').addEventListener('click',downloadSignalsCsv);$('sortField').addEventListener('change',()=>renderSignals(lastStatus?.signals||[]));$('sortDirection').addEventListener('change',()=>renderSignals(lastStatus?.signals||[]));$('applyCurrentFilters').addEventListener('click',()=>{saveLastSettings();renderSignals(lastStatus?.signals||[]);const f=applyCurrentResultFilters(lastStatus?.signals||[]);$('scanStatus').textContent='Current filters: '+f.length+' matched / '+(lastStatus?.signals||[]).length+' scanned signals. Scanner has not been restarted.';});
-['cmin','cmax','maxRange','nearPct'].forEach(id=>{const el=$(id);if(el){el.addEventListener('change',()=>{saveLastSettings();if(lastStatus)renderSignals(lastStatus.signals||[]);});}});$('autoRun').addEventListener('change',()=>{if(!$('autoRun').checked){autoActive=false;if(autoTimer)clearTimeout(autoTimer);if(!pollTimer)finish(false);}});
+async function downloadSignalsCsv(){
+  const btn=$('downloadCsvBtn');btn.disabled=true;const old=btn.textContent;btn.textContent='Preparing CSV…';
+  try{
+    const response=await fetch('/api/scanner/csv',{credentials:'same-origin',cache:'no-store'});
+    if(!response.ok){let msg='CSV request failed ('+response.status+')';try{const j=await response.json();msg=j.detail||msg;}catch{}throw new Error(msg);}
+    const blob=await response.blob();if(!blob.size)throw new Error('CSV is empty. Scan at least one symbol first.');
+    const cd=response.headers.get('Content-Disposition')||'',match=cd.match(/filename="?([^";]+)"?/i);
+    const filename=match?match[1]:'kartik_algo_scan.csv';
+    const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;a.style.display='none';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+    $('scanStatus').className='status success';$('scanStatus').textContent='CSV download started successfully.';
+  }catch(err){
+    $('scanStatus').className='status error';$('scanStatus').textContent='CSV download failed: '+err.message+' ';
+    const a=document.createElement('a');a.href='/api/scanner/csv';a.target='_blank';a.rel='noopener';a.textContent='Tap here to open CSV';a.className='btn secondary';a.style.display='inline-block';a.style.marginTop='8px';$('scanStatus').appendChild(a);
+  }finally{btn.disabled=false;btn.textContent=old;}
+}
+$('downloadCsvBtn').addEventListener('click',downloadSignalsCsv);$('sortField').addEventListener('change',()=>renderSignals(lastStatus?.signals||[]));$('sortDirection').addEventListener('change',()=>renderSignals(lastStatus?.signals||[]));$('applyCurrentFilters').addEventListener('click',()=>{saveLastSettings();renderSignals(lastStatus?.signals||[]);const f=applyCurrentResultFilters(lastStatus?.signals||[]);$('scanStatus').textContent='Current filters: '+f.length+' matched / '+(lastStatus?.signals||[]).length+' scanned signals. Scanner has not been restarted.';});['cmin','cmax','maxRange','nearPct','volumeMultiple'].forEach(id=>{const el=$(id);if(el){['input','change'].forEach(evt=>el.addEventListener(evt,()=>{saveLastSettings();if(lastStatus)renderSignals(lastStatus.signals||[]);}));}});$('autoRun').addEventListener('change',()=>{if(!$('autoRun').checked){autoActive=false;if(autoTimer)clearTimeout(autoTimer);if(!pollTimer)finish(false);}});
 async function pollScan(){try{const s=await api('/api/scanner/status');lastStatus=s;const n=s.total||0,p=s.progress||0;$('progressBar').style.width=(n?Math.min(100,p*100/n):0)+'%';$('scanStatus').className='status';$('scanStatus').textContent=`${s.timeframe} · ${p}/${n} stocks scanned · ${s.current_symbol||'Finishing'} · Signals: ${s.signals_count} · Errors: ${s.errors_count}`;renderSignals(s.signals);$('reportContent').innerHTML=`<p>Latest cycle: ${s.scan_date||'—'} · ${s.timeframe} · ${s.scanned_count||p} symbols scanned · ${s.signals_count} signals</p>`;if(s.error){$('scanStatus').className='status error';$('scanStatus').textContent='Scan stopped: '+s.error;finish(false);}else if(s.done){$('progressBar').style.width=(n?Math.min(100,p*100/n):100)+'%';$('scanStatus').className=s.stopped?'status':'status success';$('scanStatus').textContent=s.stopped?`Stopped · ${p}/${n} scanned · ${s.signals_count} signals. CSV ready.`:`Cycle complete · ${s.signals_count} setups from ${n} stocks. CSV contains ${s.scanned_count||p} scanned symbols.`;finish(!s.stopped);}}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;finish(false);}}
 function finish(scheduleNext){if(pollTimer)clearInterval(pollTimer);pollTimer=null;$('downloadCsvBtn').classList.remove('hidden');if(scheduleNext&&autoActive&&currentPayload&&$('autoRun').checked){const delay=nextSlotDelay(currentPayload.timeframe);$('scanStatus').textContent+=` · Next scan in about ${Math.ceil(delay/60000)} min`;$('stopBtn').classList.remove('hidden');$('stopBtn').textContent='■ STOP AUTO SCAN';$('runBtn').disabled=true;autoTimer=setTimeout(()=>startOneCycle(currentPayload),delay);}else{$('runBtn').disabled=false;$('stopBtn').classList.add('hidden');$('stopBtn').textContent='■ STOP SCANNER';if(!autoActive)$('scanStatus').textContent+=' · Auto scan stopped';}}
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/assets/sw.js').catch(()=>{});}
