@@ -68,7 +68,7 @@ footer{text-align:center;color:#708e79;padding:28px;font-size:12px}
 <section id="tab-scanner" class="hidden">
 <div style="margin-bottom:18px"><h1>Scanner</h1><p class="muted">Consolidation Breakout Scanner</p></div>
 <div class="panel">
-<h2>Scanner Configuration</h2>
+<h2>Scanner Configuration</h2><p class="small" id="settingsSaveStatus">Last-used scanner settings are saved automatically on this device.</p>
 <div class="grid">
 <div class="field"><label>Timeframe</label><select id="timeframe"><option value="5minute">5 Minute</option><option value="15minute">15 Minute</option><option value="60minute">60 Minute</option><option value="day" selected>Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select></div>
 <div class="field"><label>Minimum consolidation candles</label><input id="cmin" type="number" min="1" max="500" value="10"></div>
@@ -91,6 +91,8 @@ footer{text-align:center;color:#708e79;padding:28px;font-size:12px}
 </div>
 <div class="form-actions"><button class="btn full" id="runBtn">▶ RUN SCANNER · AUTO CONTINUE</button></div>
 <div class="scan-toolbar"><label class="auto-label"><input id="autoRun" type="checkbox" checked> Auto scan at next timeframe</label><div class="field"><label>Sort results by</label><select id="sortField"><option value="signal">Signal Priority</option><option value="symbol">Symbol</option><option value="close">Close Price</option><option value="distance_to_resistance_pct">Distance %</option><option value="volume_ratio">Volume Ratio</option><option value="range_pct">Range %</option><option value="consolidation_candles">Range Candle Count</option></select></div><div class="field"><label>Sort order</label><select id="sortDirection"><option value="asc">Ascending ↑</option><option value="desc" selected>Descending ↓</option></select></div></div>
+<div class="form-actions"><button class="btn secondary full" id="applyCurrentFilters" type="button">⚙ APPLY FILTERS TO CURRENT RESULTS (NO RESCAN)</button></div>
+<p class="small muted" id="currentFilterInfo">You can apply changed filters while scanner is stopped. This filters the results already loaded; widening filters may require a fresh scan to recover stocks not included in the previous scan.</p>
 <div class="scan-actions"><button class="btn danger hidden" id="stopBtn" type="button">■ STOP SCANNER</button><button class="btn secondary hidden" id="downloadCsvBtn" type="button">⬇ DOWNLOAD SCAN CSV (All Scanned)</button></div>
 <div id="scanStatus" class="status hidden"></div><div class="progress hidden" id="progressWrap"><div id="progressBar"></div></div>
 <div id="scanStats" class="statgrid hidden"></div><div id="scanResults"></div>
@@ -117,7 +119,22 @@ $('connectBtn').addEventListener('click',async()=>{try{const x=await api('/api/z
 function stats(signals){let c={'Consolidation Forming':0,'Near Breakout':0,'Breakout Confirmed':0};(signals||[]).forEach(x=>{if(c[x.signal]!==undefined)c[x.signal]++});$('scanStats').classList.remove('hidden');$('scanStats').innerHTML=`<div class="stat"><span>Total Setups</span><strong>${signals.length}</strong></div><div class="stat"><span>Consolidation Forming</span><strong>${c['Consolidation Forming']}</strong></div><div class="stat"><span>Near Breakout</span><strong>${c['Near Breakout']}</strong></div><div class="stat"><span>Breakout Confirmed</span><strong>${c['Breakout Confirmed']}</strong></div>`;}
 let pollTimer=null,autoTimer=null,autoActive=false,currentPayload=null,lastStatus=null;
 function sortedSignals(signals){const field=$('sortField').value,asc=$('sortDirection').value==='asc',rank={'Breakout Confirmed':3,'Near Breakout':2,'Consolidation Forming':1};return [...(signals||[])].sort((a,b)=>{let x=a[field],y=b[field];if(field==='signal'){x=rank[x]??9;y=rank[y]??9;}else if(field==='symbol'){x=String(x||'').toUpperCase();y=String(y||'').toUpperCase();}else{x=Number(x??-Infinity);y=Number(y??-Infinity);}return x<y?(asc?-1:1):x>y?(asc?1:-1):0;});}
-function renderSignals(signals){if(!signals||!signals.length){$('scanResults').innerHTML='<p class="muted">No breakout signal yet. Scanned stocks are available in CSV.</p>';return;}const keys=['symbol','signal','consolidation_candles','range_pct','close','resistance','support','buy_trigger','distance_to_resistance_pct'];const labels={symbol:'Symbol',signal:'Signal',consolidation_candles:'Range Candles',range_pct:'Range %',close:'Close',resistance:'Resistance',support:'Support',buy_trigger:'Buy Trigger',distance_to_resistance_pct:'Distance %'};const esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const rows=sortedSignals(signals).map(x=>'<tr>'+keys.map(k=>k==='symbol'?`<td><button class="chart-open" data-symbol="${esc(x.symbol)}" title="Open ${esc(x.symbol)} chart and scan conditions">${esc(x.symbol)} ↗</button></td>`:k==='signal'?`<td><span class="signal-tag ${x[k]==='Breakout Confirmed'?'signal-confirmed':x[k]==='Near Breakout'?'signal-near':'signal-forming'}">${esc(x[k])}</span></td>`:k==='consolidation_candles'?`<td><strong title="Number of candles inside the narrow consolidation range; current breakout candle is excluded">${esc(x[k])} candles</strong></td>`:`<td>${esc(x[k])}</td>`).join('')+'</tr>').join('');$('scanResults').innerHTML='<p class="small muted">Range Candles shows how many completed candles formed the narrow consolidation (signal/current candle excluded). Sort by Range Candle Count to find stocks with the most candles in a tight range. Click a symbol for its same-timeframe chart.</p><div class="tablewrap"><table><thead><tr>'+keys.map(k=>`<th>${labels[k]}</th>`).join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';document.querySelectorAll('.chart-open').forEach(b=>b.addEventListener('click',()=>openStockChart(b.dataset.symbol))); }
+function applyCurrentResultFilters(signals){
+  const min=Number($('cmin').value||1),max=Number($('cmax').value||500);
+  const maxRange=Number($('maxRange').value||20),near=Number($('nearPct').value||10);
+  return (signals||[]).filter(x=>{
+    const candles=Number(x.consolidation_candles),range=Number(x.range_pct);
+    const distance=Number(x.distance_to_resistance_pct);
+    const broke=x.signal==='Breakout Confirmed'||(Number.isFinite(distance)&&distance<0);
+    if(!Number.isFinite(candles)||candles<min||candles>max)return false;
+    if(!Number.isFinite(range)||range>maxRange)return false;
+    // Apply near-distance to current rows: retain confirmed breakouts or setups
+    // that are actually within the user's current near-breakout threshold.
+    if(!broke&&(!Number.isFinite(distance)||distance<0||distance>near))return false;
+    return true;
+  });
+}
+function renderSignals(signals){if(!signals||!signals.length){$('scanResults').innerHTML='<p class="muted">No breakout signal yet. Scanned stocks are available in CSV.</p>';return;}const keys=['symbol','signal','consolidation_candles','range_pct','close','resistance','support','buy_trigger','distance_to_resistance_pct'];const labels={symbol:'Symbol',signal:'Signal',consolidation_candles:'Range Candles',range_pct:'Range %',close:'Close',resistance:'Resistance',support:'Support',buy_trigger:'Buy Trigger',distance_to_resistance_pct:'Distance %'};const esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const filtered=applyCurrentResultFilters(signals);const rows=sortedSignals(filtered).map(x=>'<tr>'+keys.map(k=>k==='symbol'?`<td><button class="chart-open" data-symbol="${esc(x.symbol)}" title="Open ${esc(x.symbol)} chart and scan conditions">${esc(x.symbol)} ↗</button></td>`:k==='signal'?`<td><span class="signal-tag ${x[k]==='Breakout Confirmed'?'signal-confirmed':x[k]==='Near Breakout'?'signal-near':'signal-forming'}">${esc(x[k])}</span></td>`:k==='consolidation_candles'?`<td><strong title="Number of candles inside the narrow consolidation range; current breakout candle is excluded">${esc(x[k])} candles</strong></td>`:`<td>${esc(x[k])}</td>`).join('')+'</tr>').join('');$('scanResults').innerHTML='<p class="small muted">Showing '+filtered.length+' of '+signals.length+' loaded results after current filters. Range Candles shows how many completed candles formed the narrow consolidation (signal/current candle excluded). Sort by Range Candle Count to find stocks with the most candles in a tight range. Click a symbol for its same-timeframe chart.</p><div class="tablewrap"><table><thead><tr>'+keys.map(k=>`<th>${labels[k]}</th>`).join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';document.querySelectorAll('.chart-open').forEach(b=>b.addEventListener('click',()=>openStockChart(b.dataset.symbol))); }
 
 function closeStockChart(){ $('chartModal').classList.add('hidden');document.body.style.overflow=''; }
 $('closeChart').addEventListener('click',closeStockChart);$('chartModal').addEventListener('click',e=>{if(e.target===$('chartModal'))closeStockChart();});document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('chartModal').classList.contains('hidden'))closeStockChart();});
@@ -128,12 +145,44 @@ async function openStockChart(symbol){$('chartModal').classList.remove('hidden')
 function makePayload(){const min=+$('cmin').value,max=+$('cmax').value;if(min<1||max<1||min>max)throw new Error('Please check minimum and maximum consolidation candles.');return {timeframe:$('timeframe').value,universe:$('universe').value,consolidation_min:min,consolidation_max:max,max_range_pct:+$('maxRange').value,near_pct:+$('nearPct').value,volume_multiple:+$('volumeMultiple').value,volume_period:+$('volumePeriod').value,max_symbols:+$('maxSymbols').value,request_delay:+$('requestDelay').value};}
 function nextSlotDelay(tf){const now=new Date(),parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(now),v={};parts.forEach(p=>v[p.type]=p.value);const d=new Date(`${v.year}-${v.month}-${v.day}T${v.hour}:${v.minute}:${v.second}`),base=new Date(d);base.setHours(9,15,0,0);let target=new Date(base);if(['5minute','15minute','60minute'].includes(tf)){const m=tf==='5minute'?5:tf==='15minute'?15:60;const elapsed=Math.max(0,(d-base)/60000),k=Math.floor(elapsed/m)+1;target.setMinutes(base.getMinutes()+k*m);if(d<base)target=base;}else if(tf==='day'){target.setDate(target.getDate()+1);target.setHours(9,15,0,0);}else if(tf==='week'){const days=(8-target.getDay())%7||7;target.setDate(target.getDate()+days);target.setHours(9,15,0,0);}else{target.setMonth(target.getMonth()+1,1);target.setHours(9,15,0,0);}return Math.max(1000,target-d);}
 async function startOneCycle(payload){$('runBtn').disabled=true;$('stopBtn').classList.remove('hidden');$('scanResults').innerHTML='';$('scanStats').classList.add('hidden');$('downloadCsvBtn').classList.remove('hidden');$('progressWrap').classList.remove('hidden');$('progressBar').style.width='0%';$('scanStatus').className='status';$('scanStatus').textContent='Starting scan cycle…';try{await api('/api/scanner/start',{method:'POST',body:JSON.stringify(payload)});if(pollTimer)clearInterval(pollTimer);pollTimer=setInterval(pollScan,1800);await pollScan();}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;finish(false);}}
-$('runBtn').addEventListener('click',()=>{try{if(autoTimer)clearTimeout(autoTimer);currentPayload=makePayload();autoActive=$('autoRun').checked;startOneCycle(currentPayload);}catch(e){alert(e.message);}});
+$('runBtn').addEventListener('click',()=>{try{if(autoTimer)clearTimeout(autoTimer);currentPayload=makePayload();saveLastSettings();autoActive=$('autoRun').checked;startOneCycle(currentPayload);}catch(e){alert(e.message);}});
 $('stopBtn').addEventListener('click',async()=>{autoActive=false;if(autoTimer)clearTimeout(autoTimer);const scanInProgress=!!pollTimer;try{const r=await api('/api/scanner/stop',{method:'POST'});$('scanStatus').textContent=r.message+' Waiting for current symbol to finish; CSV will remain available.';}catch(e){$('scanStatus').textContent=e.message;}if(!scanInProgress)finish(false);});
-$('downloadCsvBtn').addEventListener('click',downloadSignalsCsv);$('sortField').addEventListener('change',()=>renderSignals(lastStatus?.signals||[]));$('sortDirection').addEventListener('change',()=>renderSignals(lastStatus?.signals||[]));$('autoRun').addEventListener('change',()=>{if(!$('autoRun').checked){autoActive=false;if(autoTimer)clearTimeout(autoTimer);if(!pollTimer)finish(false);}});
+$('downloadCsvBtn').addEventListener('click',downloadSignalsCsv);$('sortField').addEventListener('change',()=>renderSignals(lastStatus?.signals||[]));$('sortDirection').addEventListener('change',()=>renderSignals(lastStatus?.signals||[]));$('applyCurrentFilters').addEventListener('click',()=>{saveLastSettings();renderSignals(lastStatus?.signals||[]);const f=applyCurrentResultFilters(lastStatus?.signals||[]);$('scanStatus').textContent='Filters applied to loaded results: '+f.length+' matched. Scanner has not been restarted.';});$('autoRun').addEventListener('change',()=>{if(!$('autoRun').checked){autoActive=false;if(autoTimer)clearTimeout(autoTimer);if(!pollTimer)finish(false);}});
 async function pollScan(){try{const s=await api('/api/scanner/status');lastStatus=s;const n=s.total||0,p=s.progress||0;$('progressBar').style.width=(n?Math.min(100,p*100/n):0)+'%';$('scanStatus').className='status';$('scanStatus').textContent=`${s.timeframe} · ${p}/${n} stocks scanned · ${s.current_symbol||'Finishing'} · Signals: ${s.signals_count} · Errors: ${s.errors_count}`;renderSignals(s.signals);stats(s.signals);$('reportContent').innerHTML=`<p>Latest cycle: ${s.scan_date||'—'} · ${s.timeframe} · ${s.scanned_count||p} symbols scanned · ${s.signals_count} signals</p>`;if(s.error){$('scanStatus').className='status error';$('scanStatus').textContent='Scan stopped: '+s.error;finish(false);}else if(s.done){$('progressBar').style.width=(n?Math.min(100,p*100/n):100)+'%';$('scanStatus').className=s.stopped?'status':'status success';$('scanStatus').textContent=s.stopped?`Stopped · ${p}/${n} scanned · ${s.signals_count} signals. CSV ready.`:`Cycle complete · ${s.signals_count} setups from ${n} stocks. CSV contains ${s.scanned_count||p} scanned symbols.`;finish(!s.stopped);}}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;finish(false);}}
 function finish(scheduleNext){if(pollTimer)clearInterval(pollTimer);pollTimer=null;$('downloadCsvBtn').classList.remove('hidden');if(scheduleNext&&autoActive&&currentPayload&&$('autoRun').checked){const delay=nextSlotDelay(currentPayload.timeframe);$('scanStatus').textContent+=` · Next scan in about ${Math.ceil(delay/60000)} min`;$('stopBtn').classList.remove('hidden');$('stopBtn').textContent='■ STOP AUTO SCAN';$('runBtn').disabled=true;autoTimer=setTimeout(()=>startOneCycle(currentPayload),delay);}else{$('runBtn').disabled=false;$('stopBtn').classList.add('hidden');$('stopBtn').textContent='■ STOP SCANNER';if(!autoActive)$('scanStatus').textContent+=' · Auto scan stopped';}}
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/assets/sw.js').catch(()=>{});}
+
+const LAST_SETTINGS_KEY='kartik_algo_scanner_last_settings_v1';
+const LAST_SETTINGS_IDS=['timeframe','universe','cmin','cmax','maxRange','nearPct','volumeMultiple','volumePeriod','maxSymbols','requestDelay','autoRun','sortField','sortDirection'];
+function saveLastSettings(){
+  try{
+    const saved={};
+    LAST_SETTINGS_IDS.forEach(id=>{const el=$(id);if(el)saved[id]=el.type==='checkbox'?el.checked:el.value;});
+    localStorage.setItem(LAST_SETTINGS_KEY,JSON.stringify(saved));
+    const status=$('settingsSaveStatus');
+    if(status)status.textContent='✓ Last-used settings saved automatically on this device.';
+  }catch(e){const status=$('settingsSaveStatus');if(status)status.textContent='Settings could not be saved in this browser.';}
+}
+function restoreLastSettings(){
+  try{
+    const raw=localStorage.getItem(LAST_SETTINGS_KEY);if(!raw)return;
+    const saved=JSON.parse(raw);
+    LAST_SETTINGS_IDS.forEach(id=>{
+      const el=$(id);if(!el||!(id in saved))return;
+      if(el.type==='checkbox')el.checked=!!saved[id];
+      else el.value=String(saved[id]);
+    });
+    const status=$('settingsSaveStatus');
+    if(status)status.textContent='✓ Last-used settings restored. Changes save automatically.';
+  }catch(e){}
+}
+restoreLastSettings();
+LAST_SETTINGS_IDS.forEach(id=>{
+  const el=$(id);if(!el)return;
+  el.addEventListener('change',saveLastSettings);
+  if(el.type!=='checkbox'&&el.tagName==='INPUT')el.addEventListener('input',saveLastSettings);
+});
+
 async function boot(){try{await api('/api/app/status');enterApp();}catch(e){if(e.message==='Please login to Kartik Algo.'){$('loginView').classList.remove('hidden');}else{$('loginView').classList.remove('hidden');$('loginError').textContent=e.message;}}}
 boot();
 </script>
