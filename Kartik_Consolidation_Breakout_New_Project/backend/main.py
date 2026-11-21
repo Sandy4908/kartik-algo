@@ -1,4 +1,6 @@
 import os
+import csv
+import io
 import threading
 import uuid
 from datetime import datetime, date, time as dt_time, timedelta
@@ -8,7 +10,7 @@ from typing import Optional
 import pandas as pd
 import requests
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse, StreamingResponse
 from fastapi import Request
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel, Field
@@ -27,8 +29,8 @@ _state = {
     "kite": None,
     "last_login": None,
     "scan_job": {"running": False, "done": False, "progress": 0, "total": 0,
-                 "current_symbol": "", "signals": [], "errors": [], "error": None,
-                 "scan_date": None, "universe": None, "scan_id": None},
+                 "current_symbol": "", "signals": [], "scanned": [], "errors": [], "error": None,
+                 "stop_requested": False, "stopped": False, "scan_date": None, "universe": None, "scan_id": None},
 }
 _lock = threading.Lock()
 
@@ -339,13 +341,17 @@ def _scan_worker(settings: ScanSettings):
             source_interval = interval
         with _lock:
             job.update({"running": True, "done": False, "progress": 0, "total": len(universe),
-                        "current_symbol": "", "signals": [], "errors": [], "error": None,
-                        "scan_date": str(last_completed), "universe": settings.universe,
+                        "current_symbol": "", "signals": [], "scanned": [], "errors": [], "error": None,
+                        "stopped": False, "scan_date": str(last_completed), "universe": settings.universe,
                         "timeframe": settings.timeframe})
         import time
         for count, item in enumerate(universe, 1):
             with _lock:
+                if job.get("stop_requested"):
+                    job["stopped"] = True
+                    break
                 job["current_symbol"] = item["symbol"]
+            scan_record = {"symbol": item["symbol"], "scan_status": "No Setup"}
             try:
                 hist = kite.historical_data(item["instrument_token"],
                     start_dt, end_dt, interval=source_interval, continuous=False, oi=False)
@@ -381,13 +387,23 @@ def _scan_worker(settings: ScanSettings):
                         max_range_pct=settings.max_range_pct, near_pct=settings.near_pct,
                         volume_multiple=settings.volume_multiple, volume_period=settings.volume_period)
                     if signal:
+                        scan_record.update(signal)
+                        scan_record["scan_status"] = "Signal"
                         with _lock:
                             job["signals"].append(signal)
             except Exception as exc:
+                scan_record["scan_status"] = "Error"
+                scan_record["error"] = str(exc)[:200]
                 with _lock:
                     job["errors"].append({"symbol": item["symbol"], "error": str(exc)[:200]})
             with _lock:
+                job["scanned"].append(scan_record)
                 job["progress"] = count
+                should_stop = job.get("stop_requested", False)
+            if should_stop:
+                with _lock:
+                    job["stopped"] = True
+                break
             time.sleep(settings.request_delay)
         with _lock:
             job["signals"].sort(key=lambda x: (
@@ -416,8 +432,8 @@ def start_scan(settings: ScanSettings):
         _state["scan_job"].clear()
         _state["scan_job"].update({
             "running": True, "done": False, "progress": 0, "total": 0,
-            "current_symbol": "Preparing stock universe...", "signals": [],
-            "errors": [], "error": None, "scan_date": None,
+            "current_symbol": "Preparing stock universe...", "signals": [], "scanned": [],
+            "errors": [], "error": None, "stop_requested": False, "stopped": False, "scan_date": None,
             "universe": settings.universe, "timeframe": settings.timeframe,
             "scan_id": new_scan_id
         })
@@ -433,8 +449,37 @@ def scan_status():
             "total": j["total"], "current_symbol": j["current_symbol"],
             "signals_count": len(j["signals"]), "signals": list(j["signals"]),
             "errors_count": len(j["errors"]), "errors": list(j["errors"][-100:]),
-            "error": j["error"], "scan_date": j["scan_date"], "universe": j["universe"],
+            "scanned_count": len(j.get("scanned", [])),
+            "stopped": j.get("stopped", False), "error": j["error"], "scan_date": j["scan_date"], "universe": j["universe"],
             "timeframe": j.get("timeframe", "day"), "scan_id": j.get("scan_id")}
+
+
+@app.post("/api/scanner/stop")
+def stop_scan():
+    with _lock:
+        job = _state["scan_job"]
+        if not job.get("running"):
+            return {"ok": True, "running": False, "message": "Scanner is not running."}
+        job["stop_requested"] = True
+        return {"ok": True, "running": True, "message": "Stop requested; current symbol will finish and remaining symbols will be skipped."}
+
+
+@app.get("/api/scanner/csv")
+def download_scan_csv():
+    with _lock:
+        rows = list(_state["scan_job"].get("scanned", []))
+        scan_id = _state["scan_job"].get("scan_id") or "latest"
+    columns = ["symbol", "scan_status", "signal", "date", "close", "resistance", "support",
+               "range_pct", "distance_to_resistance_pct", "consolidation_candles", "volume",
+               "average_volume", "volume_ratio", "breakout_candle_high", "buy_trigger", "note", "error"]
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    data = "\ufeff" + output.getvalue()
+    filename = f"kartik_algo_scan_{scan_id[:8]}.csv"
+    return StreamingResponse(iter([data]), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
 
 
 @app.post("/api/scanner/run")
