@@ -30,7 +30,7 @@ _state = {
     "last_login": None,
     "scan_job": {"running": False, "done": False, "progress": 0, "total": 0,
                  "current_symbol": "", "signals": [], "scanned": [], "errors": [], "error": None,
-                 "stop_requested": False, "stopped": False, "scan_date": None, "universe": None, "scan_id": None},
+                 "stop_requested": False, "stopped": False, "scan_date": None, "universe": None, "scan_id": None, "settings": None},
 }
 _lock = threading.Lock()
 
@@ -343,7 +343,7 @@ def _scan_worker(settings: ScanSettings):
             job.update({"running": True, "done": False, "progress": 0, "total": len(universe),
                         "current_symbol": "", "signals": [], "scanned": [], "errors": [], "error": None,
                         "stopped": False, "scan_date": str(last_completed), "universe": settings.universe,
-                        "timeframe": settings.timeframe})
+                        "timeframe": settings.timeframe, "settings": settings.model_dump()})
         import time
         for count, item in enumerate(universe, 1):
             with _lock:
@@ -434,7 +434,7 @@ def start_scan(settings: ScanSettings):
             "running": True, "done": False, "progress": 0, "total": 0,
             "current_symbol": "Preparing stock universe...", "signals": [], "scanned": [],
             "errors": [], "error": None, "stop_requested": False, "stopped": False, "scan_date": None,
-            "universe": settings.universe, "timeframe": settings.timeframe,
+            "universe": settings.universe, "timeframe": settings.timeframe, "settings": settings.model_dump(),
             "scan_id": new_scan_id
         })
     threading.Thread(target=_scan_worker, args=(settings,), daemon=True).start()
@@ -480,6 +480,116 @@ def download_scan_csv():
     filename = f"kartik_algo_scan_{scan_id[:8]}.csv"
     return StreamingResponse(iter([data]), media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
+
+
+@app.get("/api/scanner/chart")
+def scanner_chart(symbol: str = Query(min_length=1, max_length=30)):
+    """Return the chart and exact consolidation conditions for a stock in the latest scan."""
+    kite = _get_kite()
+    symbol = symbol.strip().upper()
+    with _lock:
+        job = dict(_state["scan_job"])
+        settings_data = dict(job.get("settings") or {})
+        timeframe = job.get("timeframe", settings_data.get("timeframe", "day"))
+        signal_row = next((dict(x) for x in job.get("signals", []) if x.get("symbol", "").upper() == symbol), None)
+    if not settings_data:
+        raise HTTPException(409, "Run the scanner first; chart conditions are saved with each scan.")
+    # Resolve the symbol to its NSE equity token.
+    instruments = pd.DataFrame(kite.instruments("NSE"))
+    found = instruments[(instruments.get("tradingsymbol", pd.Series(dtype=str)).astype(str).str.upper() == symbol) &
+                        (instruments.get("instrument_type", pd.Series(dtype=str)).astype(str) == "EQ")]
+    if found.empty:
+        raise HTTPException(404, f"NSE equity instrument not found for {symbol}.")
+    token = int(found.iloc[0]["instrument_token"])
+    now = datetime.now(IST)
+    interval = timeframe
+    if interval in ("day", "week", "month"):
+        last_completed = now.date() if now.time() >= dt_time(15, 30) else now.date() - timedelta(days=1)
+        cmax = int(settings_data.get("consolidation_max", 15))
+        vperiod = int(settings_data.get("volume_period", 20))
+        if interval == "day":
+            history_days = max(100, cmax * 2 + vperiod * 2 + 30)
+        elif interval == "week":
+            history_days = max(730, (cmax + vperiod + 10) * 7)
+        else:
+            history_days = max(1825, (cmax + vperiod + 10) * 31)
+        start_dt = datetime.combine(last_completed - timedelta(days=history_days), dt_time.min)
+        end_dt = datetime.combine(last_completed, dt_time.max)
+        source_interval = "day"
+    else:
+        days = {"5minute": 60, "15minute": 180, "60minute": 365}[interval]
+        start_dt = datetime.combine(now.date() - timedelta(days=days), dt_time.min)
+        end_dt = now.replace(tzinfo=None)
+        last_completed = now.date()
+        source_interval = interval
+    try:
+        raw = kite.historical_data(token, start_dt, end_dt, interval=source_interval, continuous=False, oi=False)
+        df = normalize_ohlcv(pd.DataFrame(raw))
+        if interval in ("day", "week", "month"):
+            df = df[df["date"].dt.date <= last_completed].reset_index(drop=True)
+            if interval in ("week", "month"):
+                dated = df.copy()
+                if dated["date"].dt.tz is not None:
+                    dated["date"] = dated["date"].dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+                dated = dated.set_index("date")
+                rule = "W-FRI" if interval == "week" else "M"
+                df = dated.resample(rule, label="right", closed="right").agg({
+                    "open":"first", "high":"max", "low":"min", "close":"last", "volume":"sum"
+                }).dropna(subset=["open","high","low","close"]).reset_index()
+                df = normalize_ohlcv(df)
+                df = df[df["date"].dt.date <= last_completed].reset_index(drop=True)
+        else:
+            dates = df["date"]
+            if dates.dt.tz is not None:
+                dates = dates.dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+            minutes = {"5minute":5,"15minute":15,"60minute":60}[interval]
+            df = df[(dates + pd.to_timedelta(minutes, unit="m")) <= now.replace(tzinfo=None)].reset_index(drop=True)
+        result = scan_symbol(df, symbol=symbol, consolidation_min=int(settings_data.get("consolidation_min",10)),
+            consolidation_max=int(settings_data.get("consolidation_max",15)),
+            max_range_pct=float(settings_data.get("max_range_pct",3.5)),
+            near_pct=float(settings_data.get("near_pct",1)),
+            volume_multiple=float(settings_data.get("volume_multiple",1.5)),
+            volume_period=int(settings_data.get("volume_period",20)))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, "Chart data could not be fetched from Zerodha: " + str(exc)[:180])
+    if df.empty:
+        raise HTTPException(404, "No candle history returned for this symbol/timeframe.")
+    # Keep chart lightweight on mobile; condition calculation uses the full available series.
+    chart_df = df.tail(min(650, max(150, int(settings_data.get("consolidation_max", 15)) + 50))).copy().reset_index(drop=True)
+    candles = [{"time": row["date"].isoformat(), "open": float(row["open"]), "high": float(row["high"]),
+                "low": float(row["low"]), "close": float(row["close"]),
+                "volume": int(row["volume"]) if pd.notna(row["volume"]) else None}
+               for _, row in chart_df.iterrows()]
+    # Prefer the exact signal snapshot saved by the scanner; do not silently
+    # replace it with a later candle if the user opens the chart minutes later.
+    result = signal_row or result or {}
+    n = int(result.get("consolidation_candles") or settings_data.get("consolidation_min",10))
+    close = float(result.get("close") or chart_df.iloc[-1]["close"])
+    resistance = result.get("resistance")
+    support = result.get("support")
+    volume_ratio = result.get("volume_ratio")
+    range_pct = result.get("range_pct")
+    near_pct = float(settings_data.get("near_pct",1))
+    max_range = float(settings_data.get("max_range_pct",3.5))
+    vol_multiple = float(settings_data.get("volume_multiple",1.5))
+    distance = result.get("distance_to_resistance_pct")
+    conditions = [
+        {"name":"Consolidation candle count", "actual":n, "rule":f"{settings_data.get('consolidation_min',10)} to {settings_data.get('consolidation_max',15)} candles", "passed":settings_data.get('consolidation_min',10)<=n<=settings_data.get('consolidation_max',15)},
+        {"name":"Consolidation range", "actual":f"{range_pct}%", "rule":f"≤ {max_range}%", "passed":range_pct is not None and float(range_pct)<=max_range},
+        {"name":"Resistance / consolidation high", "actual":resistance, "rule":"Close above this level for breakout", "passed":resistance is not None},
+        {"name":"Support / consolidation low", "actual":support, "rule":"Lowest low in consolidation window", "passed":support is not None},
+        {"name":"Close vs resistance", "actual":close, "rule":f"Breakout: close > {resistance}; Near: within {near_pct}% below", "passed":resistance is not None and (close>float(resistance) or (distance is not None and 0<=float(distance)<=near_pct))},
+        {"name":"Volume confirmation", "actual":volume_ratio, "rule":f"Volume ratio ≥ {vol_multiple}x for confirmed breakout", "passed":volume_ratio is not None and float(volume_ratio)>=vol_multiple},
+        {"name":"Signal classification", "actual":result.get("signal", "No signal"), "rule":result.get("note", "Recalculated from latest completed candle"), "passed":bool(result)},
+    ]
+    return {"symbol":symbol,"timeframe":timeframe,"candles":candles,"conditions":conditions,
+            "signal_date":result.get("date"), "signal":result.get("signal","No signal"),"note":result.get("note",""),
+            "consolidation_candles":n,"resistance":resistance,"support":support,
+            "buy_trigger":result.get("buy_trigger"),"breakout_candle_high":result.get("breakout_candle_high"),
+            "range_pct":range_pct,"distance_to_resistance_pct":distance,"volume_ratio":volume_ratio,
+            "scan_settings":settings_data}
 
 
 @app.post("/api/scanner/run")
