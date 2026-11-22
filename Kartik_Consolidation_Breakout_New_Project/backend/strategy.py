@@ -93,3 +93,60 @@ def scan_symbol(df, symbol, consolidation_min=10, consolidation_max=15,
         "buy_trigger": round(breakout_high, 2) if breakout_high is not None else None,
         "note": note,
     }
+
+
+def scan_inside_open_close(df: pd.DataFrame, symbol: str, min_inside=3, max_n=20,
+                          entry_buffer=0.0, stop_buffer=0.0, risk_amount=1000.0,
+                          target1_rr=3.0, target2_rr=6.0):
+    """Inside Open Close: recent consecutive bars' open/close stay within mother range;
+    latest completed candle closes above mother high. Returns a breakout setup only.
+    """
+    x = normalize_ohlcv(df)
+    if len(x) < min_inside + 2:
+        return None
+    breakout = x.iloc[-1]
+    # Mother can be at most max_n candles behind the breakout bar.
+    max_age = min(int(max_n), len(x) - 1)
+    for age in range(min_inside + 1, max_age + 1):
+        mother_idx = len(x) - 1 - age
+        mother = x.iloc[mother_idx]
+        inside = x.iloc[mother_idx + 1:-1]
+        if len(inside) < min_inside:
+            continue
+        hi, lo = float(mother.high), float(mother.low)
+        # Open and close of EVERY intervening candle must be strictly inside
+        # (inclusive bounds) mother high/low. Their wicks may cross the range.
+        valid = ((inside.open >= lo) & (inside.open <= hi) &
+                 (inside.close >= lo) & (inside.close <= hi)).all()
+        if not valid:
+            continue
+        close = float(breakout.close)
+        if close <= hi:
+            continue
+        bh, bl = float(breakout.high), float(breakout.low)
+        entry = bh + float(entry_buffer)
+        sl = bl - float(stop_buffer)
+        risk_per_share = entry - sl
+        if entry <= 0 or sl < 0 or risk_per_share <= 0:
+            continue
+        qty = max(0, int(float(risk_amount) // risk_per_share))
+        half = qty // 2
+        return {
+            "symbol": str(symbol), "signal": "Inside Open Close Breakout",
+            "date": breakout.date.strftime("%Y-%m-%d"), "close": round(close, 2),
+            "resistance": round(hi, 2), "support": round(lo, 2),
+            "range_pct": round((hi-lo)/lo*100, 2) if lo > 0 else None,
+            "distance_to_resistance_pct": round((hi-close)/hi*100, 2) if hi else None,
+            "consolidation_candles": int(len(inside)),
+            "mother_candle_date": mother.date.strftime("%Y-%m-%d"),
+            "mother_high": round(hi, 2), "mother_low": round(lo, 2),
+            "breakout_candle_high": round(bh, 2), "breakout_candle_low": round(bl, 2),
+            "buy_trigger": round(entry, 2), "stoploss": round(sl, 2),
+            "risk_per_share": round(risk_per_share, 2), "risk_amount": round(float(risk_amount), 2),
+            "quantity": qty, "target1_quantity": half, "target2_quantity": qty-half,
+            "target1": round(entry + risk_per_share*float(target1_rr), 2),
+            "target2": round(entry + risk_per_share*float(target2_rr), 2),
+            "target1_rr": float(target1_rr), "target2_rr": float(target2_rr),
+            "note": "Latest completed candle closed above mother high after consecutive inside open/close candles."
+        }
+    return None

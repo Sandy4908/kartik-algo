@@ -19,7 +19,7 @@ from kiteconnect import KiteConnect
 from backend.candle_cache import load_frame as _cache_load, save_frame as _cache_save, cache_status as _cache_status
 from backend.live_stream import stream as _live_stream
 
-from backend.strategy import scan_symbol, normalize_ohlcv
+from backend.strategy import scan_symbol, scan_inside_open_close, normalize_ohlcv
 
 IST = ZoneInfo("Asia/Kolkata")
 app = FastAPI(title="Kartik Algo", version="2.0.0")
@@ -60,6 +60,12 @@ class ScanSettings(BaseModel):
     volume_period: int = Field(default=20, ge=5, le=60)
     max_symbols: int = Field(default=0, ge=0, le=2000)
     request_delay: float = Field(default=0.35, ge=0.1, le=3)
+    strategy_mode: str = Field(default="consolidation", pattern="^(consolidation|inside_open_close|both)$")
+    inside_min_candles: int = Field(default=3, ge=3, le=200)
+    inside_max_n: int = Field(default=20, ge=4, le=500)
+    inside_entry_buffer: float = Field(default=0.0, ge=0, le=10000)
+    inside_stop_buffer: float = Field(default=0.0, ge=0, le=10000)
+    inside_risk_amount: float = Field(default=1000.0, gt=0, le=10000000)
 
 
 
@@ -345,7 +351,7 @@ def _scan_worker(settings: ScanSettings):
 
         now = datetime.now(IST)
         interval = settings.timeframe
-        required_bars = max(settings.consolidation_max + settings.volume_period + 8, 80)
+        required_bars = max(settings.consolidation_max + settings.volume_period + 8, settings.inside_max_n + settings.inside_min_candles + 5, 80)
         if interval in ("day", "week", "month"):
             last_completed = now.date() if now.time() >= dt_time(15, 30) else now.date() - timedelta(days=1)
             if interval == "day":
@@ -432,16 +438,27 @@ def _scan_worker(settings: ScanSettings):
                         now_local = now.replace(tzinfo=None)
                         df = df[(dates + pd.to_timedelta(candle_minutes, unit="m")) <= now_local].reset_index(drop=True)
 
-                    signal = scan_symbol(
-                        df, symbol=item["symbol"],
-                        consolidation_min=settings.consolidation_min,
-                        consolidation_max=settings.consolidation_max,
-                        max_range_pct=settings.max_range_pct, near_pct=settings.near_pct,
-                        volume_multiple=settings.volume_multiple, volume_period=settings.volume_period
-                    )
-                    if signal:
-                        record.update(signal)
+                    signals_for_symbol = []
+                    if settings.strategy_mode in ("consolidation", "both"):
+                        old_signal = scan_symbol(
+                            df, symbol=item["symbol"],
+                            consolidation_min=settings.consolidation_min,
+                            consolidation_max=settings.consolidation_max,
+            max_range_pct=settings.max_range_pct, near_pct=settings.near_pct,
+                            volume_multiple=settings.volume_multiple, volume_period=settings.volume_period
+                        )
+                        if old_signal: signals_for_symbol.append(old_signal)
+                    if settings.strategy_mode in ("inside_open_close", "both"):
+                        inside_signal = scan_inside_open_close(
+                            df, symbol=item["symbol"], min_inside=settings.inside_min_candles,
+                            max_n=settings.inside_max_n, entry_buffer=settings.inside_entry_buffer,
+                            stop_buffer=settings.inside_stop_buffer, risk_amount=settings.inside_risk_amount
+                        )
+                        if inside_signal: signals_for_symbol.append(inside_signal)
+                    if signals_for_symbol:
+                        record.update(signals_for_symbol[0])
                         record["scan_status"] = "Signal"
+                        record["strategy_signals"] = signals_for_symbol
             except Exception as exc:
                 record["scan_status"] = "Error"
                 record["error"] = str(exc)[:200]
@@ -461,8 +478,8 @@ def _scan_worker(settings: ScanSettings):
                     with _lock:
                         job["scanned"].append(record)
                         if record.get("scan_status") == "Signal":
-                            job["signals"].append({k: v for k, v in record.items()
-                                                 if k not in ("scan_status", "error")})
+                            payload_signals = record.get("strategy_signals") or [{k:v for k,v in record.items() if k not in ("scan_status","error")}]
+                            job["signals"].extend(payload_signals)
                         elif record.get("scan_status") == "Error":
                             job["errors"].append({"symbol": record["symbol"], "error": record.get("error", "Unknown error")})
                         completed += 1
@@ -540,11 +557,22 @@ def stop_scan():
 @app.get("/api/scanner/csv")
 def download_scan_csv():
     with _lock:
-        rows = list(_state["scan_job"].get("scanned", []))
+        scanned = list(_state["scan_job"].get("scanned", []))
+        rows = []
+        for item in scanned:
+            strategies = item.get("strategy_signals") or []
+            if strategies:
+                for signal in strategies:
+                    rows.append({**item, **signal, "scan_status": "Signal"})
+            else:
+                rows.append(item)
         scan_id = _state["scan_job"].get("scan_id") or "latest"
     columns = ["symbol", "scan_status", "signal", "date", "close", "resistance", "support",
                "range_pct", "distance_to_resistance_pct", "consolidation_candles", "volume",
-               "average_volume", "volume_ratio", "breakout_candle_high", "buy_trigger", "note", "error"]
+               "average_volume", "volume_ratio", "mother_candle_date", "mother_high", "mother_low",
+               "breakout_candle_high", "breakout_candle_low", "buy_trigger", "stoploss",
+               "risk_per_share", "risk_amount", "quantity", "target1_quantity", "target2_quantity",
+               "target1", "target2", "note", "error"]
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
     writer.writeheader()

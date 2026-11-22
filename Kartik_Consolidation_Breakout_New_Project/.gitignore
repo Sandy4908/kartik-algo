@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.streamlit/secrets.toml
+\n# Never package/share real Zerodha credentials\nzerodha_credentials.txt\n# Persistent market candle cache (do not commit generated database)
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
