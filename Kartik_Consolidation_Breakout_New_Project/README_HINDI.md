@@ -70,3 +70,10 @@ Scanner result table में किसी Stock के Symbol पर क्ल
 Scanner Configuration में Strategy dropdown से Consolidation Breakout, Inside Open Close, या Run Both चुनें। Inside Open Close के नियम: configurable maximum N के भीतर Mother Candle; उसके बाद न्यूनतम 3 consecutive candles के open और close Mother Candle के high-low range में; latest completed candle का close Mother High से ऊपर। Entry breakout candle high + buffer, SL breakout candle low - buffer, quantity risk amount / per-share risk (whole shares), आधी quantity target 1:3 और शेष target 1:6। Results/CSV में mother date/range, entry, stoploss, quantity और targets शामिल हैं।
 
 ध्यान दें: इस ZIP का मौजूदा ऐप historical/live-candle आधारित **scanner signal** देता है। इस बदलाव में broker order execution, full trade lifecycle paper trading या strategy backtest engine नहीं जोड़ा गया है; वे अलग execution/backtesting modules की आवश्यकता रखते हैं। Live mode में वास्तविक order नहीं भेजे जाते।
+
+
+## Inside Open Close Backtest (नया)
+
+Scanner में Strategy `Inside Open Close` या `Run Both Strategies` चुनने पर अलग Backtest panel दिखेगा। इसमें Backtest From/To, Backtest Timeframe, Stock Group, Maximum Symbols और Request Delay चुनें। Backtest Zerodha Kite historical candles से चलता है; इसके लिए Zerodha session connected होना आवश्यक है। Inside Open Close की Minimum Inside Candles, Maximum N, Entry/Stop Buffer और Risk Amount वर्तमान strategy settings से लेता है। Target नियम 1:3 पर 50% quantity और 1:6 पर बाकी quantity हैं। Results में trades, win rate, net P&L और CSV export शामिल है।
+
+Backtest OHLC candle simulation है; यदि एक candle में Stoploss और Target दोनों छूते हैं तो conservative रूप से Stoploss पहले माना जाता है। Intraday historical range Zerodha/Kite की उपलब्धता और limits पर निर्भर करती है। API या data errors को Backtest result में per-symbol दिखाया जाता है।

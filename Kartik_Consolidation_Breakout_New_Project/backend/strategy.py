@@ -150,3 +150,59 @@ def scan_inside_open_close(df: pd.DataFrame, symbol: str, min_inside=3, max_n=20
             "note": "Latest completed candle closed above mother high after consecutive inside open/close candles."
         }
     return None
+
+
+
+def backtest_inside_open_close(df: pd.DataFrame, symbol: str, min_inside=3, max_n=20,
+                              entry_buffer=0.0, stop_buffer=0.0, risk_amount=1000.0,
+                              target1_rr=3.0, target2_rr=6.0):
+    """Historical OHLC simulation for Inside Open Close, with conservative intrabar SL priority."""
+    x = normalize_ohlcv(df)
+    trades = []
+    i = max(int(min_inside) + 1, 1)
+    while i < len(x) - 1:
+        setup = scan_inside_open_close(
+            x.iloc[:i + 1], symbol, min_inside=min_inside, max_n=max_n,
+            entry_buffer=entry_buffer, stop_buffer=stop_buffer,
+            risk_amount=risk_amount, target1_rr=target1_rr, target2_rr=target2_rr)
+        if not setup:
+            i += 1
+            continue
+        entry = float(setup['buy_trigger']); sl = float(setup['stoploss'])
+        qty = int(setup['quantity']); q1=int(setup['target1_quantity']); q2=int(setup['target2_quantity'])
+        if qty <= 0 or entry <= sl:
+            i += 1; continue
+        t1=float(setup['target1']); t2=float(setup['target2'])
+        entry_idx=None
+        # Entry is a stop-buy above breakout candle; only subsequent bars can fill.
+        for j in range(i+1, len(x)):
+            if float(x.iloc[j]['high']) >= entry:
+                entry_idx=j; break
+        if entry_idx is None:
+            i += 1; continue
+        remaining=qty; pnl=0.0; t1_done=False; exit_idx=entry_idx; exit_reason='Period End'
+        for j in range(entry_idx, len(x)):
+            bar=x.iloc[j]; lo=float(bar['low']); hi=float(bar['high'])
+            exit_idx=j
+            # Conservative assumption if SL and target coexist in one OHLC candle.
+            if lo <= sl:
+                pnl += remaining*(sl-entry); remaining=0; exit_reason='Stoploss'; break
+            if not t1_done and hi >= t1 and q1>0:
+                pnl += q1*(t1-entry); remaining-=q1; t1_done=True
+            if remaining>0 and hi >= t2:
+                pnl += remaining*(t2-entry); remaining=0; exit_reason='Target 2'; break
+        if remaining>0:
+            last=float(x.iloc[exit_idx]['close'])
+            pnl += remaining*(last-entry)
+            if t1_done: exit_reason='Target 1 + Period End'
+        trades.append({
+            'symbol':str(symbol), 'mother_date':setup.get('mother_candle_date'),
+            'signal_date':setup.get('date'), 'entry_date':x.iloc[entry_idx]['date'].strftime('%Y-%m-%d %H:%M'),
+            'exit_date':x.iloc[exit_idx]['date'].strftime('%Y-%m-%d %H:%M'),
+            'entry':round(entry,2),'stoploss':round(sl,2),'target1':round(t1,2),'target2':round(t2,2),
+            'quantity':qty,'target1_quantity':q1,'target2_quantity':q2,
+            'exit_reason':exit_reason,'pnl':round(pnl,2),'risk_amount':round(float(risk_amount),2),
+            'invested':round(entry*qty,2),'return_pct':round(pnl/(entry*qty)*100,2) if entry*qty else 0
+        })
+        i=max(i+1, exit_idx+1)
+    return trades

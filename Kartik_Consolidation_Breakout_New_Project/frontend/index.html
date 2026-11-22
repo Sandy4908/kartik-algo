@@ -111,6 +111,20 @@ footer{text-align:center;color:#708e79;padding:28px;font-size:12px}
 <div id="scanStatus" class="status hidden"></div><div class="progress hidden" id="progressWrap"><div id="progressBar"></div></div>
 <div id="scanStats" class="statgrid hidden"></div><div id="scanResults"></div>
 </div>
+<div class="panel" id="insideBacktestPanel">
+<h2>Inside Open Close · Backtest</h2>
+<p class="small muted">Historical simulation uses Zerodha historical candle data. Backtest settings and scan settings are separate.</p>
+<div class="grid">
+<div class="field"><label>Backtest From</label><input id="btFrom" type="date"></div>
+<div class="field"><label>Backtest To</label><input id="btTo" type="date"></div>
+<div class="field"><label>Backtest Timeframe</label><select id="btTimeframe"><option value="5minute">5 Minute</option><option value="15minute" selected>15 Minute</option><option value="60minute">60 Minute</option><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select></div>
+<div class="field"><label>Backtest Stock Group</label><select id="btUniverse"><option value="NSE 50 Only">NIFTY 50</option><option value="NSE 500 Only">NIFTY 500</option><option value="F&O Only">F&amp;O Stocks</option><option value="NSE 50 + NSE 500">NIFTY 50 + 500</option><option value="NSE 50 + F&O">NIFTY 50 + F&amp;O</option><option value="NSE 500 + F&O">NIFTY 500 + F&amp;O</option><option value="NSE 50 + NSE 500 + F&amp;O" selected>All Groups</option></select></div>
+<div class="field"><label>Maximum Symbols (for API speed)</label><input id="btMaxSymbols" type="number" min="1" max="500" value="50"></div>
+<div class="field"><label>Backtest Request Delay (sec)</label><input id="btDelay" type="number" min=".1" max="3" step=".05" value=".35"></div>
+</div>
+<div class="form-actions"><button class="btn full" id="runInsideBacktest">▶ RUN INSIDE OPEN CLOSE BACKTEST</button></div>
+<div id="btStatus" class="status hidden"></div><div id="btSummary" class="statgrid hidden"></div><div id="btTrades"></div>
+</div>
 </section>
 <section id="tab-reports" class="hidden"><div class="panel"><h1>Reports</h1><p class="muted">The latest completed scan results appear here during this session.</p><div id="reportContent" class="muted">No scan report yet.</div></div></section>
 <section id="tab-settings" class="hidden">
@@ -181,6 +195,41 @@ async function downloadSignalsCsv(){
 $('downloadCsvBtn').addEventListener('click',downloadSignalsCsv);$('sortField').addEventListener('change',()=>renderSignals(lastStatus?.signals||[]));$('sortDirection').addEventListener('change',()=>renderSignals(lastStatus?.signals||[]));$('applyCurrentFilters').addEventListener('click',()=>{saveLastSettings();renderSignals(lastStatus?.signals||[]);const f=applyCurrentResultFilters(lastStatus?.signals||[]);$('scanStatus').textContent='Current filters: '+f.length+' matched / '+(lastStatus?.signals||[]).length+' scanned signals. Scanner has not been restarted.';});['strategyMode','insideMin','insideMaxN','insideEntryBuffer','insideStopBuffer','insideRiskAmount','cmin','cmax','maxRange','nearPct','volumeMultiple'].forEach(id=>{const el=$(id);if(el){['input','change'].forEach(evt=>el.addEventListener(evt,()=>{saveLastSettings();if(lastStatus)renderSignals(lastStatus.signals||[]);}));}});$('autoRun').addEventListener('change',()=>{if(!$('autoRun').checked){autoActive=false;if(autoTimer)clearTimeout(autoTimer);if(!pollTimer)finish(false);}});
 async function pollScan(){try{const s=await api('/api/scanner/status');lastStatus=s;const n=s.total||0,p=s.progress||0;$('progressBar').style.width=(n?Math.min(100,p*100/n):0)+'%';$('scanStatus').className='status';const c=s.cache||{},w=s.websocket||{};$('scanStatus').textContent=`${s.timeframe} · ${p}/${n} stocks scanned · ${s.current_symbol||'Finishing'} · Signals: ${s.signals_count} · Errors: ${s.errors_count} · Cache: ${c.cached_instruments||0} stocks/${c.cached_candles||0} candles · WS: ${w.connected?'LIVE':'connecting'} (${w.subscribed_instruments||0} subscribed)`;renderSignals(s.signals);$('reportContent').innerHTML=`<p>Latest cycle: ${s.scan_date||'—'} · ${s.timeframe} · ${s.scanned_count||p} symbols scanned · ${s.signals_count} signals</p>`;if(s.error){$('scanStatus').className='status error';$('scanStatus').textContent='Scan stopped: '+s.error;finish(false);}else if(s.done){$('progressBar').style.width=(n?Math.min(100,p*100/n):100)+'%';$('scanStatus').className=s.stopped?'status':'status success';$('scanStatus').textContent=s.stopped?`Stopped · ${p}/${n} scanned · ${s.signals_count} signals. CSV ready.`:`Cycle complete · ${s.signals_count} setups from ${n} stocks. CSV contains ${s.scanned_count||p} scanned symbols.`;finish(!s.stopped);}}catch(e){$('scanStatus').className='status error';$('scanStatus').textContent=e.message;finish(false);}}
 function finish(scheduleNext){if(pollTimer)clearInterval(pollTimer);pollTimer=null;$('downloadCsvBtn').classList.remove('hidden');if(scheduleNext&&autoActive&&currentPayload&&$('autoRun').checked){const delay=nextSlotDelay(currentPayload.timeframe);$('scanStatus').textContent+=` · Next scan in about ${Math.ceil(delay/60000)} min`;$('stopBtn').classList.remove('hidden');$('stopBtn').textContent='■ STOP AUTO SCAN';$('runBtn').disabled=true;autoTimer=setTimeout(()=>startOneCycle(currentPayload),delay);}else{$('runBtn').disabled=false;$('stopBtn').classList.add('hidden');$('stopBtn').textContent='■ STOP SCANNER';if(!autoActive)$('scanStatus').textContent+=' · Auto scan stopped';}}
+
+// Inside Open Close historical backtest controls
+(function initInsideBacktest(){
+ const today=new Date(), prior=new Date(today);prior.setDate(prior.getDate()-30);
+ const iso=d=>{const z=new Date(d.getTime()-d.getTimezoneOffset()*60000);return z.toISOString().slice(0,10);};
+ $('btTo').value=iso(today);$('btFrom').value=iso(prior);
+ $('runInsideBacktest').addEventListener('click',async()=>{
+   const btn=$('runInsideBacktest');btn.disabled=true;btn.textContent='Backtest running…';
+   const status=$('btStatus');status.className='status';status.textContent='Fetching historical candles from Zerodha and simulating trades…';status.classList.remove('hidden');
+   $('btSummary').classList.add('hidden');$('btTrades').innerHTML='';
+   try{
+     const payload={timeframe:$('btTimeframe').value,universe:$('btUniverse').value,from_date:$('btFrom').value,to_date:$('btTo').value,
+       max_symbols:+$('btMaxSymbols').value,request_delay:+$('btDelay').value,
+       inside_min_candles:+$('insideMin').value,inside_max_n:+$('insideMaxN').value,
+       inside_entry_buffer:+$('insideEntryBuffer').value,inside_stop_buffer:+$('insideStopBuffer').value,
+       inside_risk_amount:+$('insideRiskAmount').value};
+     if(!payload.from_date||!payload.to_date||payload.from_date>=payload.to_date)throw new Error('Please select valid From and To dates.');
+     const result=await api('/api/backtest/inside-open-close',{method:'POST',body:JSON.stringify(payload)});
+     status.className='status success';status.textContent=`Completed · ${result.symbols_scanned}/${result.symbols_requested} symbols · ${result.errors_count} data errors`;
+     const cards=[['Trades',result.trade_count],['Win Rate',result.win_rate+'%'],['Wins / Losses',result.wins+' / '+result.losses],['Net P&L','₹'+Number(result.total_pnl).toLocaleString('en-IN',{maximumFractionDigits:2})]];
+     $('btSummary').innerHTML=cards.map(([a,b])=>`<div class="stat"><span>${a}</span><strong>${b}</strong></div>`).join('');$('btSummary').classList.remove('hidden');
+     if(!result.trades.length){$('btTrades').innerHTML='<p class="muted">No historical trades matched these settings. Try a wider date range or more symbols.</p>';}
+     else{
+       const cols=['symbol','mother_date','signal_date','entry_date','exit_date','entry','stoploss','target1','target2','quantity','exit_reason','pnl','invested','return_pct'];
+       const esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+       const rows=result.trades.map(t=>'<tr>'+cols.map(c=>'<td>'+esc(t[c])+'</td>').join('')+'</tr>').join('');
+       $('btTrades').innerHTML='<div class="scan-actions"><button class="btn secondary" id="downloadBtCsv">⬇ DOWNLOAD BACKTEST CSV</button></div><div class="tablewrap"><table><thead><tr>'+cols.map(c=>'<th>'+c.replaceAll('_',' ')+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';
+       $('downloadBtCsv').addEventListener('click',()=>{const csv=[cols.join(','),...result.trades.map(t=>cols.map(c=>'"'+String(t[c]??'').replaceAll('"','""')+'"').join(','))].join('\r\n');const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='inside_open_close_backtest.csv';a.click();URL.revokeObjectURL(url);});
+     }
+     if(result.errors?.length){const e=document.createElement('p');e.className='small muted';e.textContent='Some symbols failed: '+result.errors.slice(0,5).map(x=>x.symbol+': '+x.error).join(' | ');$('btTrades').appendChild(e);}
+   }catch(e){status.className='status error';status.textContent='Backtest failed: '+e.message;}
+   finally{btn.disabled=false;btn.textContent='▶ RUN INSIDE OPEN CLOSE BACKTEST';}
+ });
+})();
+
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/assets/sw.js').catch(()=>{});}
 
 const LAST_SETTINGS_KEY='kartik_algo_scanner_last_settings_v1';
@@ -213,6 +262,7 @@ function updateStrategySettingsVisibility(){
   const showInside=mode==='inside_open_close'||mode==='both';
   const showConsolidation=mode==='consolidation'||mode==='both';
   ['insideSettingsGroup'].forEach(id=>$(id)?.classList.toggle('hidden',!showInside));
+  $('insideBacktestPanel')?.classList.toggle('hidden',!showInside);
   ['consolidationSettingsGroup','consolidationAdvancedSettingsGroup'].forEach(id=>$(id)?.classList.toggle('hidden',!showConsolidation));
 }
 $('strategyMode').addEventListener('change',()=>{updateStrategySettingsVisibility();saveLastSettings();});

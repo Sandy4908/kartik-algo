@@ -19,7 +19,7 @@ from kiteconnect import KiteConnect
 from backend.candle_cache import load_frame as _cache_load, save_frame as _cache_save, cache_status as _cache_status
 from backend.live_stream import stream as _live_stream
 
-from backend.strategy import scan_symbol, scan_inside_open_close, normalize_ohlcv
+from backend.strategy import scan_symbol, scan_inside_open_close, backtest_inside_open_close, normalize_ohlcv
 
 IST = ZoneInfo("Asia/Kolkata")
 app = FastAPI(title="Kartik Algo", version="2.0.0")
@@ -67,6 +67,20 @@ class ScanSettings(BaseModel):
     inside_stop_buffer: float = Field(default=0.0, ge=0, le=10000)
     inside_risk_amount: float = Field(default=1000.0, gt=0, le=10000000)
 
+
+
+class InsideBacktestSettings(BaseModel):
+    timeframe: str = Field(default="15minute", pattern="^(5minute|15minute|60minute|day|week|month)$")
+    universe: str = "NSE 50 + NSE 500 + F&O"
+    from_date: date
+    to_date: date
+    max_symbols: int = Field(default=50, ge=1, le=500)
+    request_delay: float = Field(default=0.35, ge=0.1, le=3)
+    inside_min_candles: int = Field(default=3, ge=3, le=200)
+    inside_max_n: int = Field(default=20, ge=4, le=500)
+    inside_entry_buffer: float = Field(default=0, ge=0, le=10000)
+    inside_stop_buffer: float = Field(default=0, ge=0, le=10000)
+    inside_risk_amount: float = Field(default=1000, gt=0, le=10000000)
 
 
 CREDENTIALS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "zerodha_credentials.txt")
@@ -691,6 +705,63 @@ def scanner_chart(symbol: str = Query(min_length=1, max_length=30)):
             "buy_trigger":result.get("buy_trigger"),"breakout_candle_high":result.get("breakout_candle_high"),
             "range_pct":range_pct,"distance_to_resistance_pct":distance,"volume_ratio":volume_ratio,
             "scan_settings":settings_data}
+
+
+@app.post("/api/backtest/inside-open-close")
+def inside_open_close_backtest(settings: InsideBacktestSettings):
+    """Run historical OHLC backtest for Inside Open Close using Zerodha historical candles."""
+    kite = _get_kite()
+    if settings.from_date >= settings.to_date:
+        raise HTTPException(422, "From date must be earlier than To date.")
+    if settings.inside_max_n < settings.inside_min_candles + 1:
+        raise HTTPException(422, "Maximum N must allow at least the minimum inside candles and mother candle.")
+    universe = _fetch_universe(kite, settings.universe)[:settings.max_symbols]
+    if not universe:
+        raise HTTPException(404, "No symbols found for the selected stock group.")
+    start_dt=datetime.combine(settings.from_date, dt_time.min)
+    end_dt=datetime.combine(settings.to_date, dt_time.max)
+    source_interval=settings.timeframe
+    if source_interval in ("week", "month"):
+        source_interval="day"
+    trades=[]; errors=[]; scanned=0
+    for item in universe:
+        try:
+            raw=_paced_historical_data(kite, int(item["instrument_token"]), start_dt, end_dt,
+                                      source_interval, settings.request_delay)
+            df=normalize_ohlcv(pd.DataFrame(raw))
+            if df.empty:
+                scanned+=1; continue
+            dates=df["date"]
+            if dates.dt.tz is not None:
+                dates=dates.dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+                df=df.copy(); df["date"]=dates
+            df=df[(df["date"]>=pd.Timestamp(start_dt)) & (df["date"]<=pd.Timestamp(end_dt))].reset_index(drop=True)
+            if settings.timeframe in ("week", "month") and not df.empty:
+                df=df.set_index("date").resample("W-FRI" if settings.timeframe=="week" else "M", label="right", closed="right").agg({
+                    "open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna(subset=["open","high","low","close"]).reset_index()
+            if settings.timeframe in ("5minute","15minute","60minute") and not df.empty:
+                mins={"5minute":5,"15minute":15,"60minute":60}[settings.timeframe]
+                now=datetime.now(IST).replace(tzinfo=None)
+                df=df[(df["date"]+pd.to_timedelta(mins,unit="m"))<=now].reset_index(drop=True)
+            if len(df)>settings.inside_min_candles+2:
+                trades.extend(backtest_inside_open_close(df,item["symbol"],
+                    min_inside=settings.inside_min_candles,max_n=settings.inside_max_n,
+                    entry_buffer=settings.inside_entry_buffer,stop_buffer=settings.inside_stop_buffer,
+                    risk_amount=settings.inside_risk_amount,target1_rr=3,target2_rr=6))
+            scanned+=1
+        except Exception as exc:
+            errors.append({"symbol":item["symbol"],"error":str(exc)[:220]})
+            scanned+=1
+    trades.sort(key=lambda t:t.get("entry_date", ""))
+    total_pnl=round(sum(t["pnl"] for t in trades),2)
+    wins=sum(1 for t in trades if t["pnl"]>0)
+    losses=sum(1 for t in trades if t["pnl"]<0)
+    return {"strategy":"Inside Open Close","timeframe":settings.timeframe,
+            "from_date":str(settings.from_date),"to_date":str(settings.to_date),
+            "symbols_requested":len(universe),"symbols_scanned":scanned,
+            "trade_count":len(trades),"wins":wins,"losses":losses,
+            "win_rate":round(wins/len(trades)*100,2) if trades else 0,
+            "total_pnl":total_pnl,"errors_count":len(errors),"errors":errors[:30],"trades":trades}
 
 
 @app.post("/api/scanner/run")
