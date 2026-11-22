@@ -19,7 +19,7 @@ h1{font-size:clamp(25px,4vw,34px);margin:0 0 8px}h2{font-size:20px;margin:0 0 14
 .hero{padding:30px;background:linear-gradient(120deg,#153c27,#0d2116);border:1px solid #326a46;border-radius:18px;margin-bottom:18px}
 .btn{border:1px solid #459566;background:linear-gradient(180deg,#2b8a54,#1d6a3e);color:#fff;padding:12px 18px;border-radius:10px;font-weight:700}
 .btn.secondary{background:#142a1d;border-color:#355c42;color:#d9e9de}.btn.danger{background:#6f2530;border-color:#9c3b49}.btn:disabled{opacity:.5;cursor:not-allowed}
-.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:13px;color:#c4d9ca}.field input,.field select{width:100%;background:#202c25;color:#f4fff6;border:1px solid #3b5143;border-radius:9px;padding:11px 12px;min-height:43px}
+.strategy-group-title{grid-column:1/-1;padding:9px 0 2px;border-bottom:1px solid #294f37;margin-top:3px}.strategy-group-title strong{color:#8fe0ae;font-size:14px}.strategy-group-title span{display:block}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:13px;color:#c4d9ca}.field input,.field select{width:100%;background:#202c25;color:#f4fff6;border:1px solid #3b5143;border-radius:9px;padding:11px 12px;min-height:43px}
 .field input:focus,.field select:focus{outline:2px solid #398b59;border-color:#398b59}
 .form-actions{margin-top:18px}.full{width:100%}
 .statgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:16px 0}.stat{background:#102a1c;border:1px solid #28583b;border-radius:13px;padding:16px}.stat span{display:block;color:#a9cdb5;font-size:13px}.stat strong{font-size:28px}
@@ -71,14 +71,20 @@ footer{text-align:center;color:#708e79;padding:28px;font-size:12px}
 <h2>Scanner Configuration</h2><p class="small" id="settingsSaveStatus">Last-used scanner settings are saved automatically on this device.</p>
 <div class="grid">
 <div class="field"><label>Strategy</label><select id="strategyMode"><option value="consolidation">Consolidation Breakout (Existing)</option><option value="inside_open_close">Inside Open Close</option><option value="both">Run Both Strategies</option></select></div>
+<div id="insideSettingsGroup" class="strategy-settings-group" style="display:contents">
+<div class="field strategy-group-title"><strong>Inside Open Close Settings</strong><span class="small muted">These settings apply only to Inside Open Close.</span></div>
 <div class="field"><label>Inside: Minimum candles (min 3)</label><input id="insideMin" type="number" min="3" max="200" value="3"></div>
 <div class="field"><label>Inside: Maximum N (Mother age)</label><input id="insideMaxN" type="number" min="4" max="500" value="20"></div>
 <div class="field"><label>Inside: Entry buffer (₹)</label><input id="insideEntryBuffer" type="number" min="0" step="0.05" value="0"></div>
 <div class="field"><label>Inside: Stoploss buffer (₹)</label><input id="insideStopBuffer" type="number" min="0" step="0.05" value="0"></div>
 <div class="field"><label>Inside: Risk amount (₹)</label><input id="insideRiskAmount" type="number" min="1" step="100" value="1000"></div>
+</div>
 <div class="field"><label>Timeframe</label><select id="timeframe"><option value="5minute">5 Minute</option><option value="15minute">15 Minute</option><option value="60minute">60 Minute</option><option value="day" selected>Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select></div>
+<div id="consolidationSettingsGroup" class="strategy-settings-group" style="display:contents">
+<div class="field strategy-group-title"><strong>Consolidation Breakout Settings</strong><span class="small muted">These settings apply only to Consolidation Breakout.</span></div>
 <div class="field"><label>Minimum consolidation candles</label><input id="cmin" type="number" min="1" max="500" value="10"></div>
 <div class="field"><label>Maximum consolidation candles</label><input id="cmax" type="number" min="1" max="500" value="15"></div>
+</div>
 <div class="field"><label>Stock Group</label><select id="universe">
 <option value="NSE 50 Only">NIFTY 50 Stocks</option>
 <option value="NSE 500 Only">NIFTY 500 Stocks</option>
@@ -88,10 +94,12 @@ footer{text-align:center;color:#708e79;padding:28px;font-size:12px}
 <option value="NSE 500 + F&amp;O">NIFTY 500 + F&amp;O</option>
 <option value="NSE 50 + NSE 500 + F&amp;O" selected>All: NIFTY 50 + NIFTY 500 + F&amp;O</option>
 </select></div>
+<div id="consolidationAdvancedSettingsGroup" class="strategy-settings-group" style="display:contents">
 <div class="field"><label>Maximum consolidation range (%)</label><input id="maxRange" type="number" min=".1" max="20" step=".1" value="3.5"></div>
 <div class="field"><label>Near breakout distance (%)</label><input id="nearPct" type="number" min=".1" max="10" step=".1" value="1"></div>
 <div class="field"><label>Volume multiple</label><input id="volumeMultiple" type="number" min="1" max="10" step=".1" value="1.5"></div>
 <div class="field"><label>Average volume lookback</label><input id="volumePeriod" type="number" min="5" max="60" value="20"></div>
+</div>
 <div class="field"><label>Maximum symbols (0 = all)</label><input id="maxSymbols" type="number" min="0" max="2000" value="0"></div>
 <div class="field"><label>Request delay (seconds)</label><input id="requestDelay" type="number" min=".1" max="3" step=".05" value=".2"></div>
 </div>
@@ -200,6 +208,15 @@ function restoreLastSettings(){
   }catch(e){}
 }
 restoreLastSettings();
+function updateStrategySettingsVisibility(){
+  const mode=$('strategyMode')?.value||'consolidation';
+  const showInside=mode==='inside_open_close'||mode==='both';
+  const showConsolidation=mode==='consolidation'||mode==='both';
+  ['insideSettingsGroup'].forEach(id=>$(id)?.classList.toggle('hidden',!showInside));
+  ['consolidationSettingsGroup','consolidationAdvancedSettingsGroup'].forEach(id=>$(id)?.classList.toggle('hidden',!showConsolidation));
+}
+$('strategyMode').addEventListener('change',()=>{updateStrategySettingsVisibility();saveLastSettings();});
+updateStrategySettingsVisibility();
 LAST_SETTINGS_IDS.forEach(id=>{
   const el=$(id);if(!el)return;
   el.addEventListener('change',saveLastSettings);
