@@ -1,4 +1,5 @@
 import os
+import math
 import csv
 import io
 import threading
@@ -15,6 +16,8 @@ from fastapi import Request
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel, Field
 from kiteconnect import KiteConnect
+from backend.candle_cache import load_frame as _cache_load, save_frame as _cache_save, cache_status as _cache_status
+from backend.live_stream import stream as _live_stream
 
 from backend.strategy import scan_symbol, normalize_ohlcv
 
@@ -236,6 +239,7 @@ def zerodha_status():
 
 @app.post("/api/zerodha/logout")
 def zerodha_logout():
+    _live_stream.stop()
     with _lock:
         _state["access_token"] = None
         _state["kite"] = None
@@ -310,6 +314,25 @@ def _fetch_universe(kite, choice):
 
 
 
+# Global request pacing for Kite historical API. Zerodha rate limits apply
+# across concurrent workers, so throttle request starts instead of sleeping
+# after every completed symbol.
+_kite_rate_lock = threading.Lock()
+_kite_last_request_at = 0.0
+
+def _paced_historical_data(kite, token, start_dt, end_dt, interval, delay):
+    import time
+    global _kite_last_request_at
+    min_gap = max(0.34, float(delay or 0.1))
+    with _kite_rate_lock:
+        wait = min_gap - (time.monotonic() - _kite_last_request_at)
+        if wait > 0:
+            time.sleep(wait)
+        _kite_last_request_at = time.monotonic()
+    return kite.historical_data(token, start_dt, end_dt,
+                                interval=interval, continuous=False, oi=False)
+
+
 def _scan_worker(settings: ScanSettings):
     job = _state["scan_job"]
     try:
@@ -319,49 +342,77 @@ def _scan_worker(settings: ScanSettings):
             universe = universe[:settings.max_symbols]
         if not universe:
             raise RuntimeError("No matching NSE equity instruments found in selected universe.")
+
         now = datetime.now(IST)
         interval = settings.timeframe
+        required_bars = max(settings.consolidation_max + settings.volume_period + 8, 80)
         if interval in ("day", "week", "month"):
             last_completed = now.date() if now.time() >= dt_time(15, 30) else now.date() - timedelta(days=1)
             if interval == "day":
-                history_days = max(100, settings.consolidation_max * 2 + settings.volume_period * 2 + 30)
+                # About 1.6 calendar days per trading day; avoid downloading
+                # years of daily data when only recent setup candles are needed.
+                history_days = max(180, int(required_bars * 1.6) + 20)
             elif interval == "week":
-                history_days = max(730, (settings.consolidation_max + settings.volume_period + 10) * 7)
+                history_days = max(900, int(required_bars * 7 * 1.6) + 60)
             else:
-                history_days = max(1825, (settings.consolidation_max + settings.volume_period + 10) * 31)
+                history_days = max(2500, int(required_bars * 31 * 1.6) + 90)
             start_dt = datetime.combine(last_completed - timedelta(days=history_days), dt_time.min)
             end_dt = datetime.combine(last_completed, dt_time.max)
             source_interval = "day"
         else:
-            # Intraday candles: fetch a bounded recent window and exclude the still-forming candle.
-            history_days = {"5minute": 60, "15minute": 180, "60minute": 365}[interval]
+            bars_per_session = {"5minute": 75, "15minute": 25, "60minute": 6}[interval]
+            # Fetch only enough completed bars for the configured candle and
+            # volume lookbacks, with a calendar buffer for weekends/holidays.
+            history_days = max(
+                {"5minute": 8, "15minute": 15, "60minute": 45}[interval],
+                int(math.ceil(required_bars / bars_per_session * 1.8)) + 3
+            )
             start_dt = datetime.combine(now.date() - timedelta(days=history_days), dt_time.min)
             end_dt = now.replace(tzinfo=None)
             last_completed = now.date()
             source_interval = interval
+
+        # Subscribe once to the selected stock universe. Live ticks update the local
+        # candle cache; subsequent scans do not need historical REST calls.
+        symbol_by_token = {int(x["instrument_token"]): x["symbol"] for x in universe}
+        try:
+            if _state.get("api_key") and _state.get("access_token"):
+                _live_stream.start(_state["api_key"], _state["access_token"], universe, symbol_by_token)
+        except Exception as stream_exc:
+            with _lock: job["websocket_error"] = str(stream_exc)[:250]
+
         with _lock:
             job.update({"running": True, "done": False, "progress": 0, "total": len(universe),
-                        "current_symbol": "", "signals": [], "scanned": [], "errors": [], "error": None,
-                        "stopped": False, "scan_date": str(last_completed), "universe": settings.universe,
-                        "timeframe": settings.timeframe, "settings": settings.model_dump()})
-        import time
-        for count, item in enumerate(universe, 1):
+                        "current_symbol": "Starting parallel scan...", "signals": [], "scanned": [],
+                        "errors": [], "error": None, "stopped": False, "scan_date": str(last_completed),
+                        "universe": settings.universe, "timeframe": settings.timeframe,
+                        "settings": settings.model_dump()})
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def scan_one(item):
             with _lock:
                 if job.get("stop_requested"):
-                    job["stopped"] = True
-                    break
+                    return None
                 job["current_symbol"] = item["symbol"]
-            scan_record = {"symbol": item["symbol"], "scan_status": "No Setup"}
+            record = {"symbol": item["symbol"], "scan_status": "No Setup"}
             try:
-                hist = kite.historical_data(item["instrument_token"],
-                    start_dt, end_dt, interval=source_interval, continuous=False, oi=False)
-                df = normalize_ohlcv(pd.DataFrame(hist))
+                token = int(item["instrument_token"])
+                # Cache-first: historical candles are fetched only on a cache miss.
+                df = _cache_load(token, source_interval)
+                if df.empty:
+                    hist = _paced_historical_data(
+                        kite, token, start_dt, end_dt, source_interval, settings.request_delay
+                    )
+                    df = normalize_ohlcv(pd.DataFrame(hist))
+                    if not df.empty:
+                        _cache_save(token, item["symbol"], source_interval, df, source="historical")
+                else:
+                    df = normalize_ohlcv(df)
                 if not df.empty:
                     if interval in ("day", "week", "month"):
                         df = df[df["date"].dt.date <= last_completed].reset_index(drop=True)
                         if interval in ("week", "month"):
-                            # Kite has no native weekly/monthly interval; aggregate completed
-                            # daily candles locally and discard the currently-forming period.
                             dated = df.copy()
                             if dated["date"].dt.tz is not None:
                                 dated["date"] = dated["date"].dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
@@ -374,37 +425,53 @@ def _scan_worker(settings: ScanSettings):
                             aggregated = aggregated[aggregated["date"].dt.date <= last_completed]
                             df = normalize_ohlcv(aggregated)
                     else:
-                        # Kite timestamps intraday candles at their opening time.
                         candle_minutes = {"5minute": 5, "15minute": 15, "60minute": 60}[interval]
                         dates = df["date"]
                         if dates.dt.tz is not None:
                             dates = dates.dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
                         now_local = now.replace(tzinfo=None)
                         df = df[(dates + pd.to_timedelta(candle_minutes, unit="m")) <= now_local].reset_index(drop=True)
-                    signal = scan_symbol(df, symbol=item["symbol"],
+
+                    signal = scan_symbol(
+                        df, symbol=item["symbol"],
                         consolidation_min=settings.consolidation_min,
                         consolidation_max=settings.consolidation_max,
                         max_range_pct=settings.max_range_pct, near_pct=settings.near_pct,
-                        volume_multiple=settings.volume_multiple, volume_period=settings.volume_period)
+                        volume_multiple=settings.volume_multiple, volume_period=settings.volume_period
+                    )
                     if signal:
-                        scan_record.update(signal)
-                        scan_record["scan_status"] = "Signal"
-                        with _lock:
-                            job["signals"].append(signal)
+                        record.update(signal)
+                        record["scan_status"] = "Signal"
             except Exception as exc:
-                scan_record["scan_status"] = "Error"
-                scan_record["error"] = str(exc)[:200]
-                with _lock:
-                    job["errors"].append({"symbol": item["symbol"], "error": str(exc)[:200]})
-            with _lock:
-                job["scanned"].append(scan_record)
-                job["progress"] = count
-                should_stop = job.get("stop_requested", False)
-            if should_stop:
-                with _lock:
-                    job["stopped"] = True
-                break
-            time.sleep(settings.request_delay)
+                record["scan_status"] = "Error"
+                record["error"] = str(exc)[:200]
+            return record
+
+        completed = 0
+        # Three workers accelerate the scan while global pacing keeps API
+        # request rate controlled. Stop flag prevents queued work from starting.
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="kartik-scan") as pool:
+            futures = [pool.submit(scan_one, item) for item in universe]
+            for future in as_completed(futures):
+                if job.get("stop_requested"):
+                    for pending in futures:
+                        pending.cancel()
+                record = future.result()
+                if record is not None:
+                    with _lock:
+                        job["scanned"].append(record)
+                        if record.get("scan_status") == "Signal":
+                            job["signals"].append({k: v for k, v in record.items()
+                                                 if k not in ("scan_status", "error")})
+                        elif record.get("scan_status") == "Error":
+                            job["errors"].append({"symbol": record["symbol"], "error": record.get("error", "Unknown error")})
+                        completed += 1
+                        job["progress"] = completed
+                        job["current_symbol"] = record["symbol"]
+                if job.get("stop_requested"):
+                    with _lock:
+                        job["stopped"] = True
+
         with _lock:
             job["signals"].sort(key=lambda x: (
                 {"Breakout Confirmed": 0, "Near Breakout": 1, "Consolidation Forming": 2}.get(x["signal"], 3),
@@ -451,7 +518,13 @@ def scan_status():
             "errors_count": len(j["errors"]), "errors": list(j["errors"][-100:]),
             "scanned_count": len(j.get("scanned", [])),
             "stopped": j.get("stopped", False), "error": j["error"], "scan_date": j["scan_date"], "universe": j["universe"],
-            "timeframe": j.get("timeframe", "day"), "scan_id": j.get("scan_id")}
+            "timeframe": j.get("timeframe", "day"), "scan_id": j.get("scan_id"),
+            "cache": _cache_status(), "websocket": _live_stream.status()}
+
+
+@app.get("/api/market-data/status")
+def market_data_status():
+    return {"cache": _cache_status(), "websocket": _live_stream.status()}
 
 
 @app.post("/api/scanner/stop")
